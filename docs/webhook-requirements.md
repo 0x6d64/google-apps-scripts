@@ -463,7 +463,7 @@ Testing shall cover:
 
 ### 7.1 Repository structure
 
-see [./python-client-requirements.md](./python-client-requirements.md)
+see [./python-client-requirements.md](python-client-requirements.md)
 
 ### 7.2 Deployment process
 
@@ -506,7 +506,7 @@ clasp deploy --description "webhook update"
 
 1. tokens and IDs are stored only in Apps Script Script Properties (in Google's servers)
 2. do not add a `.env` file or `secrets.json` to the repository
-3. the `README.md` shall document how to generate and configure the token (via the setup function or Apps Script UI)
+3. the `../README.md` shall document how to generate and configure the token (via the setup function or Apps Script UI)
 4. GitHub does not need to know the token; each deployed instance has its own
 
 ---
