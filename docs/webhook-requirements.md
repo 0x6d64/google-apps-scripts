@@ -209,6 +209,20 @@ The Google Sheets API allows approximately **500 requests per 100 seconds** per 
 2. the webhook shall catch this and return HTTP 500 with the message `"Google Sheets API quota exhausted, please try again later"`
 3. the client can retry after a delay (suggest 60 seconds)
 
+### 2.11 One-time self-bootstrapping (HTTP GET)
+
+The Web App shall support automated, web-based self-bootstrapping when a user first accesses the deployed Web App URL in their browser (HTTP `GET` request):
+
+1. **Initial Access (Unconfigured State)**:
+   - If `WEBHOOK_TOKEN` is not yet configured in Script Properties, the `doGet(e)` entry point shall automatically trigger the `setup()` routine.
+   - The setup routine shall generate a secure, random `WEBHOOK_TOKEN` (see section 2.2 / 5.2) and write default values for other missing properties (see section 3) into Script Properties.
+   - The Web App shall return a clean, user-friendly HTML dashboard containing the newly generated `WEBHOOK_TOKEN` in an easy-to-copy element, along with instructions on next steps (e.g., setting up local environment variables).
+   - This page must display a clear warning that the token is stored securely and cannot be recovered or displayed again from this URL.
+
+2. **Subsequent Access (Configured State)**:
+   - If a `WEBHOOK_TOKEN` is already configured, any subsequent `GET` requests must be blocked for security.
+   - The Web App shall render an "Access Denied" HTML page, informing the user that the webhook is already configured and that the token cannot be displayed or regenerated via the URL.
+
 ---
 
 ## 3. Configuration requirements
@@ -252,14 +266,15 @@ Organize code into focused functions with single responsibilities:
 
 | Function                                       | Purpose                                        |
 |------------------------------------------------|------------------------------------------------|
-| `doPost(e)`                                    | request entry point                            |
+| `doPost(e)`                                    | HTTP POST entry point                          |
+| `doGet(e)`                                     | HTTP GET entry point for self-bootstrapping    |
 | `getConfig()`                                  | load Script Properties                         |
-| `validateRequest(body)`                        | validate JSON and required fields              |
-| `appendEntry(spreadsheetId, sheetName, row)`   | append row to spreadsheet with lock            |
-| `createSpreadsheetIfMissing(name)`             | auto-create spreadsheet with standard format   |
-| `jsonResponse(ok, error)`                      | format JSON response                           |
-| `generateRandomToken(bits)`                    | generate cryptographically secure random token |
-| `findOrCreateSheet(spreadsheetId, sheetName)`  | ensure worksheet exists with headers           |
+| `setup()`                                      | initialize Script Properties & generate token  |
+| `validateRequest(body, config)`                | validate JSON and required fields              |
+| `appendEntry(sheet, row)`                      | append row to worksheet under a script lock    |
+| `getOrCreateSpreadsheet(name)`                 | find or auto-create Google Spreadsheet          |
+| `getOrCreateSheet(spreadsheet, sheetName)`     | find or auto-create worksheet with standard headers |
+| `generateRandomToken()`                        | generate cryptographically secure random token |
 
 Keep functions small and testable.
 
@@ -380,35 +395,33 @@ Return generic errors to the client; log detailed errors to Apps Script logs for
 ### 6.1 Initial setup
 
 1. **Create the Google Sheet manually** (or let the Apps Script auto-create it):
-   - recommended: create manually to ensure you own it and have the correct name
-   - sheet name: as configured in `SHEET_NAME` property
-   - worksheet should be empty (the script will create headers on first write)
+   - Recommended: create manually to ensure you own it and have the correct name.
+   - Sheet name: as configured in `SHEET_NAME` property (defaults to `"Notes"`).
 
 2. **Create the Apps Script project**:
-   - open Google Sheet → "Extensions" → "Apps Script"
-   - or create standalone project at script.google.com
+   - Open Google Sheet → "Extensions" → "Apps Script".
+   - Or create a standalone project at script.google.com.
 
-3. **Configure Script Properties**:
-   - in Apps Script editor, go to "Project Settings"
-   - enable "Script Properties"
-   - add the four required properties (see section 3)
-   - generate a strong random token for `WEBHOOK_TOKEN`
+3. **Deploy as Web App**:
+   - In Apps Script editor, click "Deploy" → "New deployment".
+   - Type: "Web app".
+   - Execute as: "Me" (your Google account).
+   - Who has access: "Anyone".
+   - Click "Deploy", authorize Google services (Sheets and Drive), and **copy the Web App URL** (the deployment URL).
 
-4. **Deploy as Web App**:
-   - in Apps Script editor, click "Deploy" → "New deployment"
-   - type: "Web app"
-   - execute as: the Google account that owns the spreadsheet
-   - who has access: "Anyone"
-   - note: "Anyone" means the URL + token is needed to use it (token is app-level auth)
-   - copy the deployment URL (you'll need this for the Bash client)
+4. **Self-Bootstrap Setup**:
+   - Open your browser and navigate to the copied Web App URL (HTTP `GET` request).
+   - The Web App will automatically run the setup routine to initialize Script Properties with default settings and generate a secure `WEBHOOK_TOKEN`.
+   - **Copy the generated token now.** For security reasons, it is stored securely in your Script Properties and will never be displayed or regenerated from this URL again (subsequent GET requests return "Access Denied").
 
-5. **Authorize Google Services**:
-   - when you first deploy, Google will ask you to authorize the script
-   - review and grant permission to access Google Sheets and Drive
+5. **Configure Custom Script Properties (Optional)**:
+   - If you need to change the default spreadsheet name, worksheet name, or timezone from the defaults:
+     - In the Apps Script editor, go to "Project Settings" → "Script Properties".
+     - Edit `SPREADSHEET_NAME`, `SHEET_NAME`, or `TIMEZONE` as needed.
 
 6. **Test the endpoint**:
-   - use the Bash client (section 7) or `curl` to send a test note
-   - verify a new row appears in the spreadsheet
+   - Use the Python client, Bash client, or `curl` to send a test note using the copied `WEBHOOK_TOKEN`.
+   - Verify a new row with the UTC timestamp appears in the spreadsheet.
 
 ### 6.2 Redeployment
 
@@ -446,14 +459,16 @@ Testing shall cover:
 8. malformed JSON → reject with error
 9. type exceeds 200 characters → reject with error
 
-#### Operational tests (4 tests)
+#### Operational tests (6 tests)
 
 1. spreadsheet does not exist before first request → auto-create with headers
 2. worksheet does not exist before first write → auto-create with headers
 3. submit 2–3 sequential requests → each creates exactly one row
 4. submit 2–3 near-simultaneous requests (within 1 second) → all rows created without duplication or corruption
+5. initial HTTP `GET` request when `WEBHOOK_TOKEN` is unconfigured → triggers automated setup, generates a random token, initializes script properties, and displays the HTML setup complete page with the generated token
+6. subsequent HTTP `GET` request when `WEBHOOK_TOKEN` is already configured → returns the HTML "Access Denied" page without displaying or regenerating the token
 
-**Test method**: use `curl` or the Bash client to submit requests. Verify results by opening the Google Sheet and inspecting rows.
+**Test method**: use `curl`, the browser, or the client tools to submit requests. Verify results by opening the Google Sheet and inspecting rows/properties.
 
 **Expected result for all valid tests**: exactly one new row with UTC timestamp, text, and type.
 
