@@ -9,7 +9,6 @@
 var MAX_BODY_BYTES = 10 * 1024; // 10 KB, see requirements 2.3 / 5.4
 var MAX_TEXT_LENGTH = 1000;
 var MAX_TYPE_LENGTH = 200;
-var MAX_ID_LENGTH = 100;
 var LOCK_TIMEOUT_MS = 5000;
 var RETRY_COUNT = 2;
 var RETRY_DELAYS_MS = [1000, 3000];
@@ -69,13 +68,7 @@ function doPost(e) {
       return jsonResponse(false, quotaAwareMessage(err, 'unable to access spreadsheet'));
     }
 
-    if (entry.id) {
-      const isDuplicate = handleIdempotency(spreadsheet, entry.id);
-      if (isDuplicate) {
-        Logger.log('Duplicate request id, skipping write: type=' + entry.type);
-        return jsonResponse(true);
-      }
-    }
+
 
     const sheet = getOrCreateSheet(spreadsheet, config.sheetName);
     const timestamp = nowUtcIso();
@@ -136,20 +129,9 @@ function validateRequest(body, config) {
     return { valid: false, error: 'type exceeds ' + MAX_TYPE_LENGTH + ' characters' };
   }
 
-  let id;
-  if (body.id !== undefined && body.id !== null) {
-    if (typeof body.id !== 'string' || body.id.length === 0) {
-      return { valid: false, error: 'invalid id' };
-    }
-    if (body.id.length > MAX_ID_LENGTH) {
-      return { valid: false, error: 'id exceeds ' + MAX_ID_LENGTH + ' characters' };
-    }
-    id = body.id;
-  }
-
   return {
     valid: true,
-    data: { text: body.text, type: body.type, id: id }
+    data: { text: body.text, type: body.type }
   };
 }
 
@@ -245,67 +227,7 @@ function appendEntry(sheet, row) {
   }
 }
 
-/**
- * Idempotency check/record for a caller-supplied request id, per
- * requirements 2.6. Checking for an existing id and recording a new
- * one both happen under the same lock acquisition, so two concurrent
- * requests with the same id can't both pass the check.
- *
- * @param {Spreadsheet} spreadsheet
- * @param {string} id
- * @return {boolean} true if this id was already seen (caller should
- *   skip the write and return success), false if it's new.
- */
-function handleIdempotency(spreadsheet, id) {
-  const metadataSheet = getOrCreateMetadataSheet(spreadsheet);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(LOCK_TIMEOUT_MS);
-  try {
-    if (isDuplicateId(metadataSheet, id)) {
-      return true;
-    }
-    recordId(metadataSheet, id);
-    return false;
-  } finally {
-    lock.releaseLock();
-  }
-}
 
-/**
- * Finds or creates the hidden "_metadata" sheet used to track
- * previously-seen request ids for idempotency (requirements 2.5, 2.6).
- *
- * @param {Spreadsheet} spreadsheet
- * @return {Sheet}
- */
-function getOrCreateMetadataSheet(spreadsheet) {
-  let sheet = spreadsheet.getSheetByName('_metadata');
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet('_metadata');
-    sheet.appendRow(['Request ID', 'Timestamp (UTC)']);
-    sheet.setFrozenRows(1);
-    sheet.hideSheet();
-  }
-  return sheet;
-}
-
-/**
- * @param {Sheet} metadataSheet
- * @param {string} id
- * @return {boolean}
- */
-function isDuplicateId(metadataSheet, id) {
-  const finder = metadataSheet.getRange('A:A').createTextFinder(id).matchEntireCell(true);
-  return finder.findNext() !== null;
-}
-
-/**
- * @param {Sheet} metadataSheet
- * @param {string} id
- */
-function recordId(metadataSheet, id) {
-  metadataSheet.appendRow([id, nowUtcIso()]);
-}
 
 /**
  * Picks a client-facing error message: the specific quota message
