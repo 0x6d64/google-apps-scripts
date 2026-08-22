@@ -143,11 +143,9 @@ class Note:
 
     type: str
     text: str
-    id: Optional[str] = None
 
     MAX_TEXT_LEN: ClassVar[int] = 1000
     MAX_TYPE_LEN: ClassVar[int] = 200
-    MAX_ID_LEN: ClassVar[int] = 100
 
     def validate(self) -> None:
         if not isinstance(self.type, str) or not self.type.strip():
@@ -158,15 +156,9 @@ class Note:
             raise ValidationError("text too long")
         if len(self.type) > self.MAX_TYPE_LEN:
             raise ValidationError("type too long")
-        if self.id is not None:
-            if not isinstance(self.id, str) or len(self.id) > self.MAX_ID_LEN:
-                raise ValidationError("id too long")
 
     def to_payload(self, token: str) -> dict:
-        payload = {"token": token, "type": self.type, "text": self.text}
-        if self.id:
-            payload["id"] = self.id
-        return payload
+        return {"token": token, "type": self.type, "text": self.text}
 
 
 @dataclass(frozen=True)
@@ -305,9 +297,9 @@ class HumanModeCLI:
     def __init__(self, client: WebhookClient):
         self.client = client
 
-    def run(self, note_type: Optional[str], text_parts: list[str], note_id: Optional[str]) -> int:
+    def run(self, note_type: Optional[str], text_parts: list[str]) -> int:
         text = " ".join(text_parts)
-        note = Note(type=note_type, text=text, id=note_id)
+        note = Note(type=note_type, text=text)
 
         try:
             note.validate()
@@ -340,7 +332,7 @@ class MachineModeCLI:
             print(SubmitResult(ok=False, error="malformed JSON").to_json())
             return 1
 
-        note = Note(type=data.get("type"), text=data.get("text"), id=data.get("id"))
+        note = Note(type=data.get("type"), text=data.get("text"))
 
         try:
             note.validate()
@@ -360,9 +352,8 @@ class MachineModeCLI:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Submit notes to a Google Sheets webhook",
-        usage="sheetpost [--id ID] [--json] TYPE [TEXT ...]",
+        usage="sheetpost [--json] TYPE [TEXT ...]",
     )
-    parser.add_argument("--id", type=str, default=None, help="Request ID for idempotency")
     parser.add_argument("--json", action="store_true", help="Machine mode (JSON stdin/stdout)")
     parser.add_argument("type", nargs="?", help="Note type")
     parser.add_argument("text", nargs="*", help="Note text")
@@ -392,7 +383,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.print_usage(sys.stderr)
         return 1
 
-    return HumanModeCLI(client).run(args.type, args.text, args.id)
+    return HumanModeCLI(client).run(args.type, args.text)
 
 
 if __name__ == "__main__":
