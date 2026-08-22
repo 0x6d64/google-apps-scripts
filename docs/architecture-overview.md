@@ -1,6 +1,7 @@
 # Architecture Overview
 
-## System diagram
+## System Diagram
+
 ```mermaid
 sequenceDiagram
     actor python_client
@@ -13,27 +14,24 @@ sequenceDiagram
     apps_script-->> python_client: report status
 ```
 
-## Data flow
+## Data Flow
 
-1. **Human or LLM** calls `sheetpost <type> <text>` or `echo '...' | sheetpost --json`
-2. **Python client** reads config from environment variables, constructs JSON payload
-3. **Python client** sends HTTPS POST to webhook URL with JSON body
-4. **Apps Script** validates request, checks token, appends row to Google Sheet
-5. **Apps Script** returns JSON response (success or error)
-6. **Python client** parses response, prints result to human or returns JSON to LLM
+1. Client triggers CLI: `sheetpost <type> <text>` or `echo '...' | sheetpost --json`.
+2. Python client reads configuration, constructs JSON payload, and sends HTTPS POST.
+3. Apps Script validates request, verifies token, and appends row to Google Sheet.
+4. Apps Script returns JSON response.
+5. Python client processes response and prints status.
 
----
+## Interface Contract
 
-## Interface contract
-
-### HTTP endpoint
+### HTTP Endpoint
 
 ```
 POST <SHEETPOST_URL>
 Content-Type: application/json
 ```
 
-### Request payload
+### Request Payload
 
 ```json
 {
@@ -44,15 +42,14 @@ Content-Type: application/json
 }
 ```
 
-**Constraints:**
-- `token`: required, string, stored in Script Properties
-- `type`: required, string, 1-200 characters. 
-  Is used to identify the kind of entry (is an idea, metric, reminder, ...)
-- `text`: required, string, 1-1000 characters (upper boundary is TBD, but 1k seems reasonable)
-- `id`: optional, string, 1-100 characters (caller-provided, no auto-generation): 
-  if clients care about the entries to be idempotent, they shall set this.
+### Constraints
 
-### Response payload — success
+* `token`: Required string matching stored `WEBHOOK_TOKEN`.
+* `type`: Required string, 1–200 characters. Identifies entry category.
+* `text`: Required string, 1–1000 characters.
+* `id`: Optional string, 1–100 characters. Used for client-side idempotency.
+
+### Response Payload: Success
 
 ```json
 {
@@ -60,9 +57,9 @@ Content-Type: application/json
 }
 ```
 
-**HTTP 200**
+HTTP Status: 200
 
-### Response payload — error
+### Response Payload: Error
 
 ```json
 {
@@ -71,24 +68,19 @@ Content-Type: application/json
 }
 ```
 
-**HTTP 400 or 500** (validation errors = 400, server errors = 500)
+HTTP Status: 400 or 500
 
-**Error examples:**
-```
-"missing token"
-"invalid token"
-"missing text"
-"text too long"
-"webhook unavailable"
-```
+### Error Messages
 
----
+* `"missing token"`
+* `"invalid token"`
+* `"missing text"`
+* `"text too long"`
+* `"webhook unavailable"`
 
 ## Configuration
 
-### Google Apps Script (server-side)
-
-Script Properties (set once, stored in Google):
+### Google Apps Script (Script Properties)
 
 ```
 WEBHOOK_TOKEN       = <random 256-bit token>
@@ -97,72 +89,58 @@ SHEET_NAME          = "Notes"
 TIMEZONE            = "Europe/Bucharest"
 ```
 
-### Python client (client-side)
-
-Environment variables (set by user):
+### Python Client (Environment Variables)
 
 ```
 SHEETPOST_URL   = "https://script.google.com/macros/d/.../usercontent"
-SHEETPOST_TOKEN = <same as WEBHOOK_TOKEN above>
+SHEETPOST_TOKEN = <Matches WEBHOOK_TOKEN>
 ```
 
----
+## Sheet Row Format
 
-## Row format in Google Sheet
-
-Each POST request appends exactly one row:
+Each POST request appends one row:
 
 | Timestamp (UTC)        | Text              | type  |
 |------------------------|-------------------|-------|
 | 2025-08-18T14:32:45Z   | Remember to call  | phone |
 | 2025-08-18T14:33:12Z   | Backup completed  | cron  |
 
-- **Timestamp**: ISO 8601 UTC (server-generated)
-- **Text**: exact text from request (preserved, no truncation)
-- **Type**: exact type from request (preserved)
+* **Timestamp**: ISO 8601 UTC (server-generated).
+* **Text**: Exact text from request.
+* **Type**: Exact type from request.
 
----
+## Retry Behavior
 
-## Retry behavior
+### Python Client
 
-### Python client
-
-- Retries **only** on network errors (timeout, connection refused, DNS failure)
-- Up to 1 retry (2 attempts total)
-- 1-second backoff between retries
+* Retries only on network errors (timeout, connection refused, DNS failure).
+* Maximum of 1 retry (2 attempts total).
+* 1-second backoff.
 
 ### Apps Script
 
-- Retries **only** on transient API errors (quota exhausted, temporary unavailability)
-- Up to 2 retries (3 attempts total)
-- Exponential backoff (1s, 3s)
+* Retries only on transient API errors (quota, temporary unavailability).
+* Maximum of 2 retries (3 attempts total).
+* Exponential backoff (1s, 3s).
 
----
+## Idempotency
 
-## Idempotency (optional)
-
-If caller provides `id` field in request:
-
-1. Apps Script checks if `id` already exists in `_metadata` sheet
-2. If yes, return success without creating duplicate row
-3. If no, create row and store `id` in `_metadata`
-
-If `id` is omitted, idempotency is not guaranteed (duplicates possible on retry).
-
----
+* Optional `id` field enables deduplication.
+* Apps Script checks if `id` exists in `_metadata` sheet.
+* If present, returns success without duplicating the row.
+* If absent, appends row and records `id`.
 
 ## Deployment
 
-1. **Setup Apps Script**:
-   - create or use existing Google Sheet
-   - deploy Apps Script as Web App
-   - configure Script Properties
-   - obtain webhook URL
+1. **Deploy Apps Script**:
+   * Create Google Sheet.
+   * Deploy Apps Script project as Web App.
+   * Configure Script Properties and obtain Web App URL.
 
-2. **Setup Python client**:
-   - clone repo, place `bin/sheetpost` in PATH
-   - set `SHEETPOST_URL` and `SHEETPOST_TOKEN` environment variables
+2. **Configure Python Client**:
+   * Add `bin/sheetpost` to PATH.
+   * Set `SHEETPOST_URL` and `SHEETPOST_TOKEN` environment variables.
 
-3. **Test**:
-   - run `sheetpost test_type "test"`
-   - verify row appears in Sheet
+3. **Verify**:
+   * Run `sheetpost test_type "test"`.
+   * Confirm the row appends to the Sheet.

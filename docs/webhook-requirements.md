@@ -1,20 +1,15 @@
-# Google Sheets Webhook — Apps Script Requirements
+# Google Sheets Webhook: Apps Script Requirements
 
 ## 1. Purpose
 
-Implement a Google Apps Script Web App that exposes an HTTPS webhook for storing text notes in a Google Sheet.
+Implement a Google Apps Script Web App HTTPS webhook for storing text notes in Google Sheets.
+The system is for a single user with low concurrent requests (<= 5 simultaneous requests).
 
-External clients (Bash script, Pebble, or other applications) can submit text entries with a type identifier and authentication token. Each accepted request appends one row to the target spreadsheet.
+## 2. Functional Requirements
 
-The system is designed for personal use by a single admin user. Concurrent request volume is expected to be low (≤ 5 simultaneous requests from 1 human + 2–3 automated scripts).
+### 2.1 Webhook Endpoint
 
----
-
-## 2. Functional requirements
-
-### 2.1 Webhook endpoint
-
-The Apps Script Web App shall expose an HTTPS `POST` endpoint accepting JSON in this form:
+The Apps Script Web App exposes an HTTPS `POST` endpoint accepting JSON:
 
 ```json
 {
@@ -25,15 +20,15 @@ The Apps Script Web App shall expose an HTTPS `POST` endpoint accepting JSON in 
 }
 ```
 
-#### Required fields
-- `token` (string): authentication secret
-- `text` (string): the note content, non-empty, max 1000 characters
-- `type` (string): type identifier, non-empty, max 200 characters
+#### Required Fields
+* `token` (string): Authentication secret.
+* `text` (string): Note content (non-empty, max 1000 characters).
+* `type` (string): Type identifier (non-empty, max 200 characters).
 
-#### Optional fields
-- `id` (string): unique request identifier for idempotency (see section 2.7)
+#### Optional Fields
+* `id` (string): Unique request identifier for idempotency (max 100 characters).
 
-#### Response format
+#### Response Format
 
 Success (HTTP 200):
 ```json
@@ -52,271 +47,183 @@ Failure (HTTP 400 or 500):
 
 ### 2.2 Authentication
 
-Every request shall be authenticated using a shared secret token.
+Every request requires authentication via a shared secret token.
 
-The token shall:
+The token must:
+1. Be stored in Google Apps Script Script Properties.
+2. Be compared against the client-supplied token.
+3. Be a minimum of 256 random bits.
+4. Never appear in source code, logs, or responses.
 
-1. be stored in Google Apps Script Script Properties (not hard-coded)
-2. be compared with the token supplied by the client
-3. be sufficiently long and random (minimum 256 bits)
-4. never appear in source code, logs, or responses
+Reject requests if:
+1. Token is missing or invalid.
+2. Request body is malformed JSON.
+3. Any required field is missing.
 
-Requests shall be rejected if:
+### 2.3 Input Validation
 
-1. token is missing
-2. token is invalid (does not match the configured token)
-3. request body is malformed JSON
-4. any required field is missing
+The webhook must validate:
+1. Request contains valid JSON.
+2. `token` is a non-empty string.
+3. `text` is a non-empty string, max 1000 characters.
+4. `type` is a non-empty string, max 200 characters.
+5. `id` (if present) is a non-empty string, max 100 characters.
+6. Request body size is under 10 KB.
 
-### 2.3 Input validation
-
-The webhook shall validate:
-
-1. request contains valid JSON
-2. `token` is a non-empty string
-3. `text` is a non-empty string, max 1000 characters
-4. `type` is a non-empty string, max 200 characters
-5. `id` (if present) is a non-empty string, max 100 characters
-6. request body is reasonable in size (recommend max 10 KB total)
-
-Unknown JSON fields shall be ignored.
+Ignore unknown JSON fields.
 
 ### 2.4 Timestamp
 
-The Apps Script shall generate the timestamp at the moment it processes the request.
+The script generates the timestamp during processing.
+Timestamps are stored in UTC in ISO 8601 format (e.g., `2025-08-18T14:32:45Z`).
+The script project uses an explicitly configured timezone for logs (e.g., `Europe/Bucharest`).
 
-The client cannot override or supply the timestamp.
+### 2.5 Google Sheet Storage
 
-Timestamps shall be stored in **UTC** as ISO 8601 format (e.g., `2025-08-18T14:32:45Z`).
+#### Sheet Identification
+* Target spreadsheet name is stored in Script Properties.
+* Target worksheet name is stored in Script Properties.
 
-The Apps Script project and spreadsheet shall use an explicitly configured timezone for logging and debugging (e.g., `Europe/Bucharest` for Romanian time).
+#### Auto-Creation
+If the spreadsheet does not exist, the script:
+1. Creates a spreadsheet with the configured name.
+2. Initializes it with standard column headers.
+3. Sets the spreadsheet owner to the script runner's account.
+4. Caches the new spreadsheet ID in `SPREADSHEET_ID` in Script Properties.
 
-### 2.5 Google Sheet storage
-
-#### Sheet identification
-
-The target spreadsheet shall be identified using a **sheet name** (not spreadsheet ID), stored in Script Properties.
-
-The target worksheet shall be identified using a **sheet name**, stored in Script Properties.
-
-#### Auto-creation
-
-If the configured spreadsheet does not exist, the Apps Script shall:
-
-1. create a new spreadsheet with the configured name
-2. initialize it with the standard column headers (see below)
-3. set the spreadsheet owner to the Google account running the script
-4. update the `SPREADSHEET_ID` in Script Properties with the newly created sheet's ID (for caching)
-
-#### Sheet format
-
-The worksheet shall contain exactly these columns in this order:
+#### Sheet Format
+The worksheet contains these columns in order:
 
 | Timestamp (UTC) | Text | type |
 |---|---|---|
 
-- **Timestamp (UTC)**: ISO 8601 datetime, e.g., `2025-08-18T14:32:45Z`
-- **Text**: the note content as received
-- **type**: the type identifier as received
+* **Timestamp (UTC)**: ISO 8601 string.
+* **Text**: Note content.
+* **type**: Type identifier.
 
-The workbook shall also contain a _metadata sheet for storing ids (used for idempotency checks).
+A hidden helper worksheet `_metadata` stores IDs for idempotency checks.
 
-#### Writing rows
+#### Writing Rows
+Each request appends one row. The script must not overwrite existing rows.
+Use `LockService.getScriptLock()` around the write section to prevent race conditions.
+Do not hold the lock during validation or logging.
 
-Each accepted webhook request shall append exactly one row.
+### 2.6 Idempotency
 
-The Apps Script shall not overwrite existing rows.
+If the client supplies an `id`:
+1. Check `id` in `_metadata` worksheet.
+2. If ID exists, return success without appending a row.
+3. If ID is new, record ID in `_metadata` and append row.
+Use `LockService` to handle concurrency during checks.
 
-The Apps Script shall use `LockService.getScriptLock()` around the critical section that writes to the spreadsheet to prevent race conditions during concurrent requests.
+### 2.7 Type Field
 
-The lock shall not be held while performing unrelated work (e.g., validation, logging).
+Store the required `type` parameter unchanged in the `type` column.
+The implementation must not hard-code allowed types.
 
-### 2.6 Idempotency (optional)
+### 2.8 Error Handling
 
-If the client supplies an `id` field (unique request identifier):
+#### Request and Validation Failures
+Return HTTP 400 for:
+* Missing or invalid token.
+* Missing or empty required fields.
+* Oversized fields or request body.
+* Malformed JSON.
 
-1. the Apps Script shall store this ID in a hidden helper sheet called `_metadata`
-2. if the same `id` is received again, the Apps Script shall return success without creating a duplicate row
-3. the implementation should use `LockService` to avoid race conditions during ID checking
-
-Idempotency is **optional**. If the client does not supply an `id`, each request creates a new row (idempotency is not guaranteed).
-
-### 2.7 type field
-
-`type` is a required parameter.
-
-The value shall be stored unchanged in the `type` column.
-
-Examples: `pebble`, `desktop`, `terminal`, `phone`, `mobile`, `web`.
-
-The implementation shall not hard-code any particular type value.
-
-### 2.8 Error handling
-
-#### Malformed requests and validation failures
-
-The script shall validate input and return a descriptive error response (HTTP 400) for:
-
-- missing or invalid token
-- missing required fields (`text`, `type`)
-- empty or oversized fields
-- malformed JSON
-
-Examples of error responses:
-
+Example:
 ```json
-{ "ok": false, "error": "missing token" }
 { "ok": false, "error": "text exceeds 1000 characters" }
-{ "ok": false, "error": "malformed JSON" }
 ```
 
-#### Spreadsheet and infrastructure failures
+#### Infrastructure Failures
+If the spreadsheet is inaccessible:
+1. Return HTTP 500.
+2. Log the failure (do not expose token or full note text).
 
-If the spreadsheet cannot be created or accessed:
-
-1. return HTTP 500 with error message
-2. log the failure with context (but never expose the token or complete note text)
-3. optionally retry (see section 2.9)
-
-Examples:
-
+Example:
 ```json
 { "ok": false, "error": "unable to access spreadsheet" }
-{ "ok": false, "error": "Google Sheets API quota exhausted, please try again later" }
 ```
 
-#### Unexpected exceptions
+#### Exceptions
+Catch all top-level exceptions and return a generic HTTP 500 error.
+Log detailed diagnostics to Apps Script logs instead of exposing them to clients.
 
-The top-level request handler shall catch all unexpected exceptions and return a generic HTTP 500 error without exposing stack traces or internal state.
+### 2.9 Retry Logic
 
-Detailed diagnostic information shall be written to Apps Script logs (not exposed to the client).
+On transient sheet errors (e.g., quota limits), retry up to 2 times with exponential backoff
+(1s, then 3s).
+Do not retry on authentication or validation failures.
+Log retry attempts.
 
-### 2.9 Retry logic
+### 2.10 Quota Limits
 
-If a write to the spreadsheet fails due to transient errors (e.g., quota exhaustion, temporary API unavailability):
+On Sheets API quota limits (HTTP 429), return HTTP 500 with message:
+`"Google Sheets API quota exhausted, please try again later"`.
 
-1. the Apps Script shall retry up to **2 times** with exponential backoff (1 second, then 3 seconds)
-2. if all retries are exhausted, return HTTP 500 with a descriptive error
-3. do not retry on authentication failure or validation errors
+### 2.11 One-Time Self-Bootstrapping (HTTP GET)
 
-Logs shall record retry attempts and failures.
+Support browser-based initialization on initial deployment:
 
-### 2.10 Google Sheets API quota
+1. **Unconfigured State**:
+   * If `WEBHOOK_TOKEN` is missing, `doGet(e)` runs the `setup()` routine.
+   * `setup()` generates a random token and sets default properties.
+   * Return an HTML page with the generated token and instructions.
+   * Warn the user that the token is stored securely and cannot be shown again.
 
-The Google Sheets API allows approximately **500 requests per 100 seconds** per user per project. For a personal script with ≤ 5 concurrent requests, quota exhaustion is unlikely under normal use. If exhausted:
+2. **Configured State**:
+   * If `WEBHOOK_TOKEN` is present, subsequent `GET` requests return "Access Denied".
 
-1. Apps Script will return error code 429 (too many requests)
-2. the webhook shall catch this and return HTTP 500 with the message `"Google Sheets API quota exhausted, please try again later"`
-3. the client can retry after a delay (suggest 60 seconds)
+## 3. Configuration Requirements
 
-### 2.11 One-time self-bootstrapping (HTTP GET)
+Configuration is stored in Script Properties.
 
-The Web App shall support automated, web-based self-bootstrapping when a user first accesses the deployed Web App URL in their browser (HTTP `GET` request):
+| Property | Example Value | Purpose |
+|---|---|---|
+| `WEBHOOK_TOKEN` | `<random 256-bit>` | Authentication secret |
+| `SPREADSHEET_NAME` | `My Notes` | Google Sheet file name |
+| `SHEET_NAME` | `Notes` | Worksheet tab name |
+| `TIMEZONE` | `Europe/Bucharest` | Timezone for logging |
 
-1. **Initial Access (Unconfigured State)**:
-   - If `WEBHOOK_TOKEN` is not yet configured in Script Properties, the `doGet(e)` entry point shall automatically trigger the `setup()` routine.
-   - The setup routine shall generate a secure, random `WEBHOOK_TOKEN` (see section 2.2 / 5.2) and write default values for other missing properties (see section 3) into Script Properties.
-   - The Web App shall return a clean, user-friendly HTML dashboard containing the newly generated `WEBHOOK_TOKEN` in an easy-to-copy element, along with instructions on next steps (e.g., setting up local environment variables).
-   - This page must display a clear warning that the token is stored securely and cannot be recovered or displayed again from this URL.
+Fallbacks:
+* `WEBHOOK_TOKEN`: Fail if missing.
+* `SPREADSHEET_NAME`: Default to `"Notes"`.
+* `SHEET_NAME`: Default to `"Notes"`.
+* `TIMEZONE`: Default to `UTC`.
 
-2. **Subsequent Access (Configured State)**:
-   - If a `WEBHOOK_TOKEN` is already configured, any subsequent `GET` requests must be blocked for security.
-   - The Web App shall render an "Access Denied" HTML page, informing the user that the webhook is already configured and that the token cannot be displayed or regenerated via the URL.
+## 4. Google Apps Script Best Practices
 
----
+### 4.1 Minimal Permissions
 
-## 3. Configuration requirements
+Only request required scopes:
+* **Sheets API** (read/write spreadsheets)
+* **Drive API** (create files if missing)
 
-Configuration shall be stored in **Google Apps Script Script Properties** and kept separate from application logic.
+### 4.2 Separation of Concerns
 
-Required properties:
+Organize code into single-responsibility functions:
 
-| Property           | Example value            | Purpose                                                  |
-|--------------------|--------------------------|----------------------------------------------------------|
-| `WEBHOOK_TOKEN`    | `<random 256-bit token>` | authentication secret                                    |
-| `SPREADSHEET_NAME` | `My Notes`               | name of the Google Sheet (auto-created if missing)       |
-| `SHEET_NAME`       | `Notes`                  | name of the worksheet within the spreadsheet             |
-| `TIMEZONE`         | `Europe/Bucharest`       | timezone for logging and display (storage is always UTC) |
+* `doPost(e)`: HTTP POST handler.
+* `doGet(e)`: HTTP GET handler (setup/bootstrap).
+* `getConfig()`: Load Script Properties.
+* `setup()`: Initialize properties and generate token.
+* `validateRequest(body, config)`: Validate fields and formats.
+* `appendEntry(sheet, row)`: Write row with lock.
+* `getOrCreateSpreadsheet(name)`: Locate or create spreadsheet.
+* `getOrCreateSheet(ss, name)`: Locate or create worksheet with headers.
+* `generateRandomToken()`: Generate 256-bit secure token.
 
-Fallback behavior if properties are missing:
+### 4.3 Logging Strategy
 
-| Property           | Fallback behavior                              |
-|--------------------|------------------------------------------------|
-| `WEBHOOK_TOKEN`    | script will not function; admin must configure |
-| `SPREADSHEET_NAME` | default to `"Notes"`                           |
-| `SHEET_NAME`       | default to `"Notes"`                           |
-| `TIMEZONE`         | default to `UTC` (no display formatting)       |
+Use Apps Script Logger to track requests, failures, and retries.
+**Never log the token or complete note text.**
 
----
+### 4.4 Concurrency Protection
 
-## 4. Google Apps Script best practices
-
-### 4.1 Minimal permissions
-
-Request only the Google services required for operation:
-
-- **Sheets API** (to read/write to spreadsheets)
-- **Drive API** (to create new spreadsheets if needed)
-
-Do not request Gmail, Calendar, or other unrelated scopes.
-
-### 4.2 Separation of concerns
-
-Organize code into focused functions with single responsibilities:
-
-| Function                                       | Purpose                                        |
-|------------------------------------------------|------------------------------------------------|
-| `doPost(e)`                                    | HTTP POST entry point                          |
-| `doGet(e)`                                     | HTTP GET entry point for self-bootstrapping    |
-| `getConfig()`                                  | load Script Properties                         |
-| `setup()`                                      | initialize Script Properties & generate token  |
-| `validateRequest(body, config)`                | validate JSON and required fields              |
-| `appendEntry(sheet, row)`                      | append row to worksheet under a script lock    |
-| `getOrCreateSpreadsheet(name)`                 | find or auto-create Google Spreadsheet          |
-| `getOrCreateSheet(spreadsheet, sheetName)`     | find or auto-create worksheet with standard headers |
-| `generateRandomToken()`                        | generate cryptographically secure random token |
-
-Keep functions small and testable.
-
-### 4.3 Logging strategy
-
-Use Apps Script Logger for operational diagnostics. Log entries shall record:
-
-- request accepted / rejected
-- validation failure reason (e.g., "empty text field")
-- type identifier (safe to log)
-- retry attempts
-- spreadsheet write success / failure
-- configuration errors
-
-**Never log:**
-
-- webhook token
-- complete note text (may log first 50 characters for debugging if needed)
-- stack traces to the client
-
-Example:
-
-```javascript
-Logger.log(`Request accepted: type=${type}, text_length=${text.length}`);
-Logger.log(`Validation failed: ${reason}`);
-Logger.log(`Retry attempt 1/2 after transient error`);
-```
-
-### 4.4 Concurrency protection
-
-For the critical section that appends to the spreadsheet:
-
-1. acquire `LockService.getScriptLock()`
-2. perform the append operation
-3. release the lock immediately
-4. do not hold the lock while validating or logging
-
-Example:
-
+Use `LockService.getScriptLock()` for sheet writes:
 ```javascript
 const lock = LockService.getScriptLock();
-lock.waitLock(5000); // wait up to 5 seconds
+lock.waitLock(5000);
 try {
   appendEntry(...);
 } finally {
@@ -324,215 +231,93 @@ try {
 }
 ```
 
-### 4.5 Explicit timezone
+### 4.5 Explicit Timezone
 
-The Apps Script shall import and use a timezone library (or manually specify timezone using `Utilities.formatDate()`).
+Use `Utilities.formatDate()` with explicit timezones for logging.
 
-Example with Utilities:
+### 4.6 Avoid Deprecated APIs
 
-```javascript
-const dateStr = Utilities.formatDate(
-  new Date(),
-  'UTC',
-  "yyyy-MM-dd'T'HH:mm:ss'Z'"
-);
-```
+Do not use deprecated Apps Script services.
 
-For display in the spreadsheet: timestamps are always stored in UTC. The presentation layer (or a separate script) can format these as Romanian time if needed.
+## 5. Security Requirements
 
-### 4.6 Avoid deprecated APIs
+### 5.1 Transport Security
 
-Use current Apps Script APIs. Avoid deprecated services like `DocsList` or old SpreadsheetApp methods.
+Webhook is accessible only over HTTPS.
 
----
+### 5.2 Token Security
 
-## 5. Security requirements
+* Store exclusively in Script Properties.
+* Generate randomly (minimum 256 bits).
+* Never hard-code or log the token.
 
-### 5.1 Transport security
+### 5.3 Authentication Model
 
-The webhook shall only be accessible via the HTTPS Apps Script Web App URL (never plain HTTP).
+The script uses shared-token verification. Anyone with the URL and token can append entries.
 
-### 5.2 Token security
+### 5.4 Input Size Limits
 
-- stored in Script Properties only
-- generated randomly (256 bits minimum)
-- never hard-coded in source
-- never logged or exposed in responses
-- not rotated (low-security personal setup)
+* Text: Max 1000 characters.
+* Type: Max 200 characters.
+* ID: Max 100 characters.
+* Body: Max 10 KB.
 
-### 5.3 Authentication model
+### 5.5 Error Messages
 
-The deployed Web App is publicly callable, but the application enforces token-based authentication:
+Do not expose stack traces, API error details, property keys, or raw payloads in HTTP responses.
 
-> Anyone who obtains the webhook URL and valid token can submit entries.
+## 6. Deployment Requirements
 
-The system relies on secrecy of the token. Treat it like a password.
+### 6.1 Initial Setup
 
-### 5.4 Input size limits
-
-Enforce reasonable limits to prevent accidental or malicious abuse:
-
-- text: max 1000 characters
-- type: max 200 characters
-- request body: max 10 KB
-- `id` (if used): max 100 characters
-
-### 5.5 Error messages
-
-Do not expose:
-
-- stack traces
-- Google Sheets API error codes or details
-- configured property names or values
-- complete request payloads
-
-Return generic errors to the client; log detailed errors to Apps Script logs for admin debugging.
-
----
-
-## 6. Deployment requirements
-
-### 6.1 Initial setup
-
-1. **Create the Google Sheet manually** (or let the Apps Script auto-create it):
-   - Recommended: create manually to ensure you own it and have the correct name.
-   - Sheet name: as configured in `SHEET_NAME` property (defaults to `"Notes"`).
-
-2. **Create the Apps Script project**:
-   - Open Google Sheet → "Extensions" → "Apps Script".
-   - Or create a standalone project at script.google.com.
-
-3. **Deploy as Web App**:
-   - In Apps Script editor, click "Deploy" → "New deployment".
-   - Type: "Web app".
-   - Execute as: "Me" (your Google account).
-   - Who has access: "Anyone".
-   - Click "Deploy", authorize Google services (Sheets and Drive), and **copy the Web App URL** (the deployment URL).
-
-4. **Self-Bootstrap Setup**:
-   - Open your browser and navigate to the copied Web App URL (HTTP `GET` request).
-   - The Web App will automatically run the setup routine to initialize Script Properties with default settings and generate a secure `WEBHOOK_TOKEN`.
-   - **Copy the generated token now.** For security reasons, it is stored securely in your Script Properties and will never be displayed or regenerated from this URL again (subsequent GET requests return "Access Denied").
-
-5. **Configure Custom Script Properties (Optional)**:
-   - If you need to change the default spreadsheet name, worksheet name, or timezone from the defaults:
-     - In the Apps Script editor, go to "Project Settings" → "Script Properties".
-     - Edit `SPREADSHEET_NAME`, `SHEET_NAME`, or `TIMEZONE` as needed.
-
-6. **Test the endpoint**:
-   - Use the Python client, Bash client, or `curl` to send a test note using the copied `WEBHOOK_TOKEN`.
-   - Verify a new row with the UTC timestamp appears in the spreadsheet.
+1. **Deploy Web App**:
+   * Deploy project as "Web app".
+   * Execute as "Me", Access: "Anyone".
+2. **Self-Bootstrap**:
+   * Navigate to Web App URL in browser.
+   * Copy the generated `WEBHOOK_TOKEN`.
+3. **Configure Options**: Optionally set custom Script Properties in Project Settings.
+4. **Test**: Send a test entry and verify the row in Sheets.
 
 ### 6.2 Redeployment
 
-If you modify the Apps Script code:
+To update code, update the existing deployment version.
 
-1. make changes in the editor
-2. click "Deploy" → update existing deployment
-3. select the current Web App deployment
-4. click "Deploy"
-5. test with a fresh webhook request
+### 6.3 Manual Testing Checklist
 
-### 6.3 Manual testing checklist
+#### Valid Requests
+* Simple/formatted/Unicode/multiline text.
+* Maximum length text (1000 characters) and minimum length text (1 character).
+* Custom type identifiers.
 
-Testing shall cover:
+#### Invalid Requests
+* Missing, invalid, or empty tokens.
+* Missing, empty, or oversized text/type fields.
+* Malformed JSON payloads.
 
-#### Valid requests (7 tests)
+#### Operational Tests
+* Auto-creation of missing spreadsheets/worksheets.
+* Concurrency handling for simultaneous writes.
+* Initial and subsequent browser GET requests.
 
-1. valid token, standard text, valid type → row created
-2. valid token, text with spaces and punctuation → stored correctly
-3. valid token, text with Unicode characters (ă, é, 中文, etc.) → stored correctly
-4. valid token, multi-line text (newlines) → stored correctly
-5. valid token, text at max length (1000 chars) → accepted
-6. valid token, very short text (1 char) → accepted
-7. valid token, custom type identifier → stored as-is
+## 7. GitHub Storage and Deployment Flow
 
-#### Invalid requests (9 tests)
+### 7.1 Repository Structure
 
-1. missing token → reject with error
-2. incorrect token → reject with error
-3. missing text field → reject with error
-4. empty text field → reject with error
-5. text exceeds 1000 characters → reject with error
-6. missing type field → reject with error
-7. empty type field → reject with error
-8. malformed JSON → reject with error
-9. type exceeds 200 characters → reject with error
+See [python-client-requirements.md](python-client-requirements.md).
 
-#### Operational tests (6 tests)
+### 7.2 Deployment Process
 
-1. spreadsheet does not exist before first request → auto-create with headers
-2. worksheet does not exist before first write → auto-create with headers
-3. submit 2–3 sequential requests → each creates exactly one row
-4. submit 2–3 near-simultaneous requests (within 1 second) → all rows created without duplication or corruption
-5. initial HTTP `GET` request when `WEBHOOK_TOKEN` is unconfigured → triggers automated setup, generates a random token, initializes script properties, and displays the HTML setup complete page with the generated token
-6. subsequent HTTP `GET` request when `WEBHOOK_TOKEN` is already configured → returns the HTML "Access Denied" page without displaying or regenerating the token
-
-**Test method**: use `curl`, the browser, or the client tools to submit requests. Verify results by opening the Google Sheet and inspecting rows/properties.
-
-**Expected result for all valid tests**: exactly one new row with UTC timestamp, text, and type.
-
----
-
-## 7. GitHub storage and deployment flow
-
-### 7.1 Repository structure
-
-see [./python-client-requirements.md](python-client-requirements.md)
-
-### 7.2 Deployment process
-
-Use `clasp` CLI
-
-`clasp` is the official Google Apps Script CLI. Setup:
+Manage deployments using the `clasp` CLI:
 
 ```bash
-# install clasp globally
 npm install -g @google/clasp
-
-# clone a project from GitHub
-git clone <your-repo>
-cd sheetpost
-
-# link clasp to your Apps Script project
-clasp clone <scriptId>  # or clasp create
-```
-
-Then to deploy:
-
-```bash
-# pull latest from Google
+clasp clone <scriptId>
 clasp pull
-
-# make local changes, commit to GitHub
-git add .
-git commit -m "update webhook logic"
-
-# push to Google
 clasp push
-
-# deploy as Web App
 clasp deploy --description "webhook update"
 ```
 
-### 7.3 Secret management
+### 7.3 Secret Management
 
-**IMPORTANT**: never commit `WEBHOOK_TOKEN` or spreadsheet IDs to GitHub.
-
-1. tokens and IDs are stored only in Apps Script Script Properties (in Google's servers)
-2. do not add a `.env` file or `secrets.json` to the repository
-3. the `../README.md` shall document how to generate and configure the token (via the setup function or Apps Script UI)
-4. GitHub does not need to know the token; each deployed instance has its own
-
----
-
-## Assumptions made for personal single-user setup
-
-- **No user authentication required** for the Web App itself (app-level token auth is sufficient).
-- **No audit trail or user attribution** beyond the `type` field.
-- **No rate limiting or quota monitoring** beyond Google's API limits; the system is for light personal use.
-- **No backup or disaster recovery** beyond Google's built-in backup (Google Sheets data is persistent).
-- **Timezone for logging only**: timestamps are always stored in UTC; display formatting is optional.
-- **Idempotency is optional**: clients can supply an `id` field for deduplication, but it is not required.
-- **Token does not rotate**: this is a personal, low-security setup; token rotation is not needed.
-- **Single spreadsheet and worksheet**: the script targets one specific sheet; no multi-sheet or multi-spreadsheet routing.
+Do not commit `WEBHOOK_TOKEN` or spreadsheet IDs to GitHub.
