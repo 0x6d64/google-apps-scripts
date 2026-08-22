@@ -12,3 +12,10 @@
 * Do not provide long summaries.
 * Do not repeat information already obvious from the code or task.
 * Report only important changes, decisions, and test results.
+
+## Markdown files
+
+* always use real headers using the `#` symbol, not just bold text.
+* use GitHub flavored Markdown.
+* use the `##` symbol for sub-sections and `###` for sub-sub-sections.
+* do not use `---` to add additional separation.
