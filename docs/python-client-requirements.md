@@ -23,7 +23,7 @@ echo '{"type": "llm", "text": "The user asked about Python"}' | sheetpost --json
 ### 2.1 Language and dependencies
 
 - **Language**: Python 3.10+
-- **Dependencies**: builtin only (`json`, `urllib`, `argparse`, `sys`, `os`, `uuid`)
+- **Dependencies**: builtin only (`json`, `urllib`, `argparse`, `sys`, `os`, `pathlib`)
 - **No external packages** (`requests`, `httpx`, etc.)
 - **Rationale**: simplicity, zero installation overhead, single-file deployment
 
@@ -77,21 +77,47 @@ sheetpost phone "Unicode: ă, é, 中文"
 
 ### 3.2 Configuration
 
-Configuration via environment variables:
+Configuration via environment variables or `.env` files:
 
+**Environment variables:**
 ```bash
 export SHEETPOST_URL="https://script.google.com/macros/d/.../usercontent"
 export SHEETPOST_TOKEN="<your-secret-token>"
 ```
 
-If either is unset, the client prints an error and exits with code 1:
+**Or `.env` file:**
+Create `~/.env` or `./.env` in the current directory:
+```
+SHEETPOST_URL=https://script.google.com/macros/d/.../usercontent
+SHEETPOST_TOKEN=<your-secret-token>
+```
+
+If `SHEETPOST_URL` or `SHEETPOST_TOKEN` are not set (from env or `.env`), the client prints an error and exits with code 1:
 
 ```
 Error: SHEETPOST_URL not set
 Error: SHEETPOST_TOKEN not set
 ```
 
-### 3.3 JSON payload (human mode)
+### 3.3 .env file loading
+
+The client automatically loads variables from `.env` files in this order:
+1. `~/.env` (home directory, lower priority)
+2. `./.env` (current directory, higher priority)
+
+**Behavior:**
+- Reads `KEY=VALUE` format (one per line, `#` comments ignored)
+- Only loads `SHEETPOST_*` variables
+- Does not override explicit environment variables (explicit env vars take precedence)
+- Silently skips missing files
+- Silently skips invalid lines
+
+**Precedence** (highest to lowest):
+1. Explicit environment variables (`export SHEETPOST_URL=...`)
+2. `./.env` (current directory)
+3. `~/.env` (home directory)
+
+### 3.4 JSON payload (human mode)
 
 The client constructs a JSON request:
 
@@ -102,33 +128,6 @@ The client constructs a JSON request:
   "text": "<joined text>"
 }
 ```
-
-The `id` field is omitted unless the user explicitly provides `--id` (see 3.4).
-
-### 3.4 Optional: request ID for idempotency
-
-Users can optionally provide a request ID to enable idempotency (duplicate prevention):
-
-```bash
-sheetpost --id "my-request-123" pebble "My note"
-```
-
-If provided, the JSON includes:
-
-```json
-{
-  "token": "...",
-  "type": "pebble",
-  "text": "My note",
-  "id": "my-request-123"
-}
-```
-
-**The client does not auto-generate IDs.** It is the caller's responsibility to provide a unique ID if idempotency is desired. This allows:
-
-- humans to omit `--id` and permit duplicates on retries
-- scripts to generate UUIDs, timestamps, or custom IDs as needed
-- LLMs to include idempotency if their framework supports it
 
 ### 3.5 Response handling (human mode)
 
@@ -193,8 +192,7 @@ The client reads a single JSON object from stdin:
 ```json
 {
   "type": "llm",
-  "text": "The observation to log",
-  "id": "optional-unique-request-id"
+  "text": "The observation to log"
 }
 ```
 
@@ -204,8 +202,6 @@ The client reads a single JSON object from stdin:
 - `text` (string): note content
 
 #### Optional fields
-
-- `id` (string): unique request ID for idempotency (caller must provide; client does not generate)
 
 Unknown fields are ignored.
 
@@ -297,18 +293,23 @@ SHEETPOST_TOKEN="<secret-token>"
 
 Both are required. If missing, the client exits with an error.
 
-### 5.2 No config file
+### 5.2 .env files
 
-Environment variables only. Users can:
+The client automatically loads `.env` files if present. See section 3.3 for details.
 
-- export them in `.bashrc` or `.zshrc`
-- pass them to the script: `SHEETPOST_URL="..." SHEETPOST_TOKEN="..." sheetpost pebble "note"`
-- source from a shell script: `source ~/.sheetpost_env && sheetpost pebble "note"`
-
-**Note**: if storing secrets in a file (e.g., `.sheetpost_env`), protect it:
+Users can also manually source `.env` files:
 
 ```bash
-chmod 600 ~/.sheetpost_env
+source ~/.env
+sheetpost pebble "note"
+```
+
+### 5.3 Security
+
+If storing secrets in a `.env` file, protect it:
+
+```bash
+chmod 600 ~/.env
 ```
 
 ---
@@ -318,9 +319,9 @@ chmod 600 ~/.sheetpost_env
 The client shall:
 
 1. never print the token (not in logs, not in responses, not in error messages)
-2. read the token only from `SHEETPOST_TOKEN` environment variable
+2. read the token only from `SHEETPOST_TOKEN` environment variable or `.env` file
 3. use HTTPS only (validate that `SHEETPOST_URL` starts with `https://`)
-4. not store credentials locally (environment variables only)
+4. not store credentials locally beyond `.env` files
 5. properly escape and encode JSON input using `json.dumps()` (prevent injection)
 
 ---
@@ -333,16 +334,13 @@ The client shall:
 sheetpost/
 ├── README.md
 ├── src/
-│   ├── Code.gs
-│   ├── Config.gs
-│   └── Utils.gs
-├── appsscript.json
-├── src/
 │   └── sheetpost.py
 ├── test/
 │   └── test_sheetpost.py
-└── examples/
-    └── ollama_function_calling.json
+├── bin/
+│   └── sheetpost
+├── test.sh
+└── ENV_INTEGRATION.md
 ```
 
 ### 7.2 Installation
@@ -365,18 +363,15 @@ mkdir -p ~/.local/bin
 ln -s "$PWD/bin/sheetpost" ~/.local/bin/sheetpost
 export PATH="$HOME/.local/bin:$PATH"
 
-# Option C: Copy directly to /usr/local/bin (requires sudo)
+# Option C: Copy to /usr/local/bin (requires sudo)
 sudo cp bin/sheetpost /usr/local/bin/sheetpost
 ```
 
-3. **Set environment variables**:
+3. **Set environment variables** or create `.env` files:
 
 ```bash
 export SHEETPOST_URL="https://script.google.com/macros/d/.../usercontent"
 export SHEETPOST_TOKEN="<your-token-from-webhook-setup>"
-
-# Optionally save to a shell script for later:
-# ~/ .sheetpost_env
 ```
 
 4. **Test**:
@@ -387,7 +382,7 @@ sheetpost pebble "test note"
 
 ### 7.3 The `bin/sheetpost` script
 
-A single Python script (`#!/usr/bin/env python3`), executable, no extension:
+A Python script that invokes `src/sheetpost.py`, executable with shebang:
 
 ```bash
 chmod +x bin/sheetpost
@@ -415,9 +410,6 @@ sheetpost desktop "Backup completed at $(date)"
 
 # From cron
 0 9 * * * sheetpost cron "Daily backup started"
-
-# With idempotency
-sheetpost --id "backup-2025-01-15" cron "Daily backup started"
 
 # Multi-line
 sheetpost desktop "$(cat <<EOF
@@ -460,88 +452,9 @@ echo '{"type": "llm", "text": "The user asked about Python"}' | sheetpost --json
 
 ---
 
-## 9. LLM integration examples
+## 9. Error handling
 
-### 9.1 Ollama function calling
-
-Example tool definition for Ollama's function-calling mode:
-
-```json
-{
-  "name": "sheetpost",
-  "description": "Log an observation or note to the personal notes sheet",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "type": {
-        "type": "string",
-        "description": "type identifier (e.g., 'llm', 'pebble', 'phone')"
-      },
-      "text": {
-        "type": "string",
-        "description": "The note or observation to log (max 1000 chars)"
-      },
-      "id": {
-        "type": "string",
-        "description": "Optional: unique request ID for idempotency (to prevent duplicate entries)"
-      }
-    },
-    "required": ["type", "text"]
-  }
-}
-```
-
-**Usage in Ollama prompt**:
-
-```
-You have access to the following tools:
-{
-  "type": "function",
-  "function": {
-    "name": "sheetpost",
-    "description": "Log an observation or note to the personal notes sheet",
-    "parameters": { ... (see above) }
-  }
-}
-
-When you want to log something, output a tool call like:
-{
-  "tool": "sheetpost",
-  "input": {"type": "llm", "text": "The user requested ..."}
-}
-```
-
-### 9.2 Generic LLM prompt example
-
-For LLMs without built-in function-calling support, instruct them to output JSON:
-
-```
-When you want to log a note, output:
-{
-  "tool": "sheetpost",
-  "input": {
-    "type": "llm",
-    "text": "<what you want to log>"
-  }
-}
-
-Example:
-User: "What's 2+2?"
-Assistant: The answer is 4.
-{
-  "tool": "sheetpost",
-  "input": {
-    "type": "llm",
-    "text": "User asked: What's 2+2? Answer: 4"
-  }
-}
-```
-
----
-
-## 10. Error handling
-
-### 10.1 Input validation
+### 9.1 Input validation
 
 The client shall validate:
 
@@ -549,8 +462,7 @@ The client shall validate:
 2. `text` is present and non-empty
 3. `text` does not exceed 1000 characters
 4. `type` does not exceed 200 characters
-5. `id` (if present) does not exceed 100 characters
-6. JSON is valid (if in `--json` mode)
+5. JSON is valid (if in `--json` mode)
 
 Error messages are short:
 
@@ -559,13 +471,12 @@ missing type
 missing text
 text too long
 type too long
-id too long
 malformed JSON
 ```
 
-### 10.2 Environment variable validation
+### 9.2 Environment variable validation
 
-If `SHEETPOST_URL` or `SHEETPOST_TOKEN` are missing, exit immediately with:
+If `SHEETPOST_URL` or `SHEETPOST_TOKEN` are missing (from env or `.env`), exit immediately with:
 
 ```
 Error: SHEETPOST_URL not set
@@ -578,7 +489,7 @@ Validate that `SHEETPOST_URL` starts with `https://` (not `http://`):
 Error: SHEETPOST_URL must use https
 ```
 
-### 10.3 Network errors
+### 9.3 Network errors
 
 On network-level failures, retry up to 1 time (2 attempts total) with 1-second backoff.
 
@@ -590,7 +501,7 @@ Network error: DNS lookup failed
 Network error: Connection refused
 ```
 
-### 10.4 Webhook errors
+### 9.4 Webhook errors
 
 If the webhook returns HTTP 4xx or 5xx, or `ok: false`:
 
@@ -604,7 +515,7 @@ If the webhook returns HTTP 4xx or 5xx, or `ok: false`:
 {"ok": false, "error": "<short error from webhook>"}
 ```
 
-### 10.5 Malformed webhook response
+### 9.5 Malformed webhook response
 
 If the webhook's response is not valid JSON or does not contain `ok` field:
 
@@ -620,13 +531,13 @@ If the webhook's response is not valid JSON or does not contain `ok` field:
 
 ---
 
-## 11. Testing
+## 10. Testing
 
-### 11.1 Manual testing checklist
+### 10.1 Manual testing checklist
 
 #### Setup (1 test)
 
-1. configure `SHEETPOST_URL` and `SHEETPOST_TOKEN`
+1. configure `SHEETPOST_URL` and `SHEETPOST_TOKEN` (via env or `.env`)
 2. verify webhook is deployed and accessible
 3. run `sheetpost pebble "test"` and verify row appears in spreadsheet
 
@@ -647,11 +558,10 @@ If the webhook's response is not valid JSON or does not contain `ok` field:
 4. missing text: `sheetpost pebble` → usage error
 5. invalid token: set wrong token, run `sheetpost pebble "test"` → webhook error
 
-#### Machine mode — valid requests (3 tests)
+#### Machine mode — valid requests (2 tests)
 
 1. minimal input: `echo '{"type":"llm", "text":"test"}' | sheetpost --json` → `{"ok":true}`
-2. with id: `echo '{"type":"llm", "text":"test", "id":"123"}' | sheetpost --json` → `{"ok":true}`
-3. Unicode: `echo '{"type":"llm", "text":"ă, é, 中文"}' | sheetpost --json` → `{"ok":true}`
+2. Unicode: `echo '{"type":"llm", "text":"ă, é, 中文"}' | sheetpost --json` → `{"ok":true}`
 
 #### Machine mode — error cases (4 tests)
 
@@ -660,15 +570,11 @@ If the webhook's response is not valid JSON or does not contain `ok` field:
 3. text too long: `echo '{"type":"llm", "text":"...1001 chars..."}' | sheetpost --json` → `{"ok":false, "error":"text too long"}`
 4. malformed JSON: `echo 'not json' | sheetpost --json` → `{"ok":false, "error":"malformed JSON"}`
 
-#### Idempotency (1 test)
-
-1. `sheetpost --id "test-123" pebble "test"` twice → one row created, same timestamp
-
 **Test method**: manual invocation. Verify rows in spreadsheet and exit codes.
 
 ---
 
-## 12. Acceptance criteria
+## 11. Acceptance criteria
 
 The Python client is complete when:
 
@@ -684,18 +590,16 @@ The Python client is complete when:
 10. human mode error messages are human-readable.
 11. Python version 3.10+ is required and checked at startup.
 12. uses only stdlib (no external dependencies).
-13. `--id` flag in human mode allows optional idempotency (caller provides ID, not auto-generated).
-14. client retries only on network errors, not on HTTP/validation errors.
-15. Ollama function-calling example is included in the repository.
+13. client retries only on network errors, not on HTTP/validation errors.
+14. `.env` files are automatically loaded from `~/.env` and `./.env`.
+15. explicit environment variables take precedence over `.env` files.
 
 ---
 
 ## Assumptions
 
 - **Python 3.10+** is available on all deployment targets.
-- **stdlib only**: `json`, `urllib`, `argparse`, `sys`, `os`, `uuid` (for reading IDs, not generating).
-- **Single-user personal setup**: no concurrent LLM instances; low traffic volume.
-- **Configuration via environment variables**: no config files, no secrets management system.
-- **No auto-generated request IDs**: caller (human, script, or LLM) is responsible for providing `id` if idempotency is desired.
-- **Short error messages for machines**: LLM callers need to parse errors and adjust; verbose errors are for humans in human mode.
+- **stdlib only**: `json`, `urllib`, `argparse`, `sys`, `os`, `pathlib`.
+- **Single-user personal setup**: no concurrent instances; low traffic volume.
+- **Configuration via environment variables or `.env` files**: no config files in `/etc`, no secrets management system.
 - **Webhook already handles API-level retries**: client retries only network-level failures to avoid stacking retries.
