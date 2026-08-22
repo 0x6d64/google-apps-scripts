@@ -352,11 +352,58 @@ class MachineModeCLI:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Submit notes to a Google Sheets webhook",
-        usage="sheetpost [--json] TYPE [TEXT ...]",
+        usage="sheetpost [--json] TYPE [TEXT ...]\n       sheetpost --json < input.json",
+        epilog="""
+EXAMPLES:
+
+  Human mode (interactive):
+    sheetpost phone "Call mom at 5pm"
+    sheetpost desktop "Line 1\\nLine 2"
+
+  Machine mode (JSON stdin/stdout):
+    echo '{"type":"llm", "text":"User asked about Python"}' | sheetpost --json
+
+  Typical JSON mode workflow:
+    1. Generate JSON: {"type":"llm", "text":"..."}
+    2. Pipe to sheetpost: | sheetpost --json
+    3. Parse response: {"ok": true} or {"ok": false, "error": "..."}
+
+CONFIGURATION:
+
+  Use environment variables or .env files:
+    export SHEETPOST_URL="https://script.google.com/macros/s/<script-id>/exec"
+    export SHEETPOST_TOKEN="secret-token"
+
+  Or create ~/.env or ./.env:
+    SHEETPOST_URL=https://...
+    SHEETPOST_TOKEN=secret
+
+MACHINE MODE (--json):
+
+  Input JSON schema:
+    {"type": "string", "text": "string"}
+
+  Output on success:
+    {"ok": true}
+
+  Output on error:
+    {"ok": false, "error": "missing text"}
+
+  Error codes:
+    - missing type, missing text
+    - text too long (>1000 chars), type too long (>200 chars)
+    - malformed JSON
+    - webhook unavailable, invalid response
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--json", action="store_true", help="Machine mode (JSON stdin/stdout)")
-    parser.add_argument("type", nargs="?", help="Note type")
-    parser.add_argument("text", nargs="*", help="Note text")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Machine mode: read JSON from stdin, write JSON to stdout (no human output)",
+    )
+    parser.add_argument("type", nargs="?", help="Note type identifier (e.g., pebble, phone, llm)")
+    parser.add_argument("text", nargs="*", help="Note text (joined with spaces)")
     return parser
 
 
