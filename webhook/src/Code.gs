@@ -243,3 +243,55 @@ function quotaAwareMessage(err, fallbackMessage) {
     ? 'Google Sheets API quota exhausted, please try again later'
     : fallbackMessage;
 }
+
+
+/**
+ * HTTP GET entry point. Enables one-time automatic self-bootstrapping
+ * when first deployed. Generates a WEBHOOK_TOKEN and outputs it in a
+ * clean, easy-to-copy HTML layout. Subsequent requests are rejected.
+ *
+ * @param {Object} e Apps Script event object.
+ * @return {HtmlService.HtmlOutput}
+ */
+function doGet(e) {
+  const props = PropertiesService.getScriptProperties();
+  const existingToken = props.getProperty('WEBHOOK_TOKEN');
+
+  if (existingToken) {
+    return HtmlService.createHtmlOutput(
+      '<!DOCTYPE html><html><head><title>Sheetpost Setup</title>' +
+      '<style>body { font-family: sans-serif; padding: 40px; text-align: center; color: #333; background-color: #fcfcfc; } ' +
+      '.card { max-width: 500px; margin: 40px auto; border: 1px solid #e0e0e0; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); background: #fff; } ' +
+      'h1 { color: #d9534f; margin-top: 0; } ' +
+      'p { font-size: 1.1em; line-height: 1.5; color: #666; }</style></head>' +
+      '<body><div class="card"><h1>Access Denied</h1><p>Webhook is already configured. For security reasons, the existing token cannot be displayed or regenerated via this URL.</p></div></body></html>'
+    );
+  }
+
+  const token = setup();
+
+  return HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html><head><title>Sheetpost Setup Complete</title>' +
+    '<style>' +
+    'body { font-family: sans-serif; padding: 40px; background-color: #f9f9f9; color: #333; } ' +
+    '.card { max-width: 600px; margin: 0 auto; background: white; border: 1px solid #e0e0e0; padding: 40px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); } ' +
+    'h1 { color: #2ca02c; margin-top: 0; } ' +
+    '.token-box { background: #f1f1f1; border: 1px dashed #ccc; padding: 15px; font-family: monospace; font-size: 1.1em; word-break: break-all; margin: 20px 0; border-radius: 4px; user-select: all; } ' +
+    'ol { padding-left: 20px; line-height: 1.6; } ' +
+    'code { background: #eee; padding: 2px 5px; border-radius: 3px; font-family: monospace; }' +
+    '</style></head>' +
+    '<body><div class="card">' +
+    '<h1>✓ Setup Complete</h1>' +
+    '<p>Google Sheets Webhook has been successfully initialized!</p>' +
+    '<p><strong>Your WEBHOOK_TOKEN is:</strong></p>' +
+    '<div class="token-box">' + token + '</div>' +
+    '<p style="color: #c9302c;"><strong>IMPORTANT:</strong> Copy this token now. It is stored securely in your Script Properties and will never be displayed here again.</p>' +
+    '<h3>Next Steps:</h3>' +
+    '<ol>' +
+    '<li>Set your client-side environment variable:<br><code>export SHEETPOST_TOKEN="' + token + '"</code></li>' +
+    '<li>Configure your client-side webhook URL to point to this Web App deployment URL.</li>' +
+    '<li>Submit a test note!</li>' +
+    '</ol>' +
+    '</div></body></html>'
+  );
+}

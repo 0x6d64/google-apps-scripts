@@ -31,7 +31,8 @@ function getConfig() {
 /**
  * One-time interactive setup. Run this manually from the Apps Script
  * editor (select "setup" in the function dropdown, then "Run") after
- * first deploying the project.
+ * first deploying the project, or visit the deployed Web App URL to
+ * trigger automatic self-bootstrapping.
  *
  * Generates a WEBHOOK_TOKEN if one isn't already configured, and fills
  * in default values for the remaining properties. Existing values are
@@ -41,15 +42,19 @@ function getConfig() {
  * from there into your client's SHEETPOST_TOKEN environment variable.
  * It is never stored anywhere else and cannot be recovered later; if
  * you lose it, delete the WEBHOOK_TOKEN property and re-run setup().
+ *
+ * @return {string|null} The newly generated token if setup was executed, or null.
  */
 function setup() {
   const props = PropertiesService.getScriptProperties();
+  let generatedToken = null;
 
   if (!props.getProperty('WEBHOOK_TOKEN')) {
     const token = generateRandomToken();
     props.setProperty('WEBHOOK_TOKEN', token);
     Logger.log('Generated WEBHOOK_TOKEN (copy this now, it will not be shown again):');
     Logger.log(token);
+    generatedToken = token;
   } else {
     Logger.log('WEBHOOK_TOKEN already set — leaving unchanged.');
   }
@@ -70,4 +75,5 @@ function setup() {
   }
 
   Logger.log('Setup complete. Review values under Project Settings > Script Properties.');
+  return generatedToken;
 }

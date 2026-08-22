@@ -19,3 +19,4 @@
 * use GitHub flavored Markdown.
 * use the `##` symbol for sub-sections and `###` for sub-sub-sections.
 * do not use `---` to add additional separation.
+* ensure that lines are not longer than 100 characters.
