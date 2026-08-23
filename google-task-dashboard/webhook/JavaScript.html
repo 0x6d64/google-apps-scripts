@@ -19,9 +19,10 @@
     };
 
     /**
-     * Initializes Google Charts and fetches dashboard metrics.
+     * Initializes Google Charts, notifications container, and fetches dashboard metrics.
      */
     function init() {
+      initNotifications();
       google.charts.load('current', { packages: ['corechart'] });
       google.charts.setOnLoadCallback(fetchData);
       setupResizeHandler();
@@ -37,6 +38,63 @@
           if (rawData) renderCharts();
         }, 300);
       });
+    }
+
+    /**
+     * Initializes dynamic notification container in DOM.
+     */
+    function initNotifications() {
+      if (!document.getElementById('notificationContainer')) {
+        const container = document.createElement('div');
+        container.id = 'notificationContainer';
+        container.className = 'notification-container';
+        document.body.appendChild(container);
+      }
+    }
+
+    /**
+     * Displays a compact notification bubble with auto-dismiss.
+     * @param {string} message - Text content (supports newlines)
+     * @param {string} icon - Emoji icon
+     * @param {string} type - 'success' | 'error' | 'info'
+     * @param {number} durationMs - Auto-dismiss timeout (ms)
+     */
+    function showNotification(message, icon, type = 'info', durationMs = 3000) {
+      initNotifications();
+      const container = document.getElementById('notificationContainer');
+      if (!container) return;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'notification-bubble ' + type;
+      bubble.innerHTML = `
+        <span class="notification-icon">${icon}</span>
+        <span class="notification-text">${message}</span>
+        <button class="notification-dismiss" title="Dismiss">×</button>
+      `;
+
+      const dismissBtn = bubble.querySelector('.notification-dismiss');
+      if (dismissBtn) {
+        dismissBtn.addEventListener('click', () => {
+          bubble.classList.add('dismissing');
+          setTimeout(() => bubble.remove(), 250);
+        });
+      }
+
+      container.appendChild(bubble);
+
+      // Keep max 3 bubbles visible at once
+      while (container.children.length > 3) {
+        container.removeChild(container.firstChild);
+      }
+
+      if (durationMs > 0) {
+        setTimeout(() => {
+          if (bubble.parentElement) {
+            bubble.classList.add('dismissing');
+            setTimeout(() => bubble.remove(), 250);
+          }
+        }, durationMs);
+      }
     }
 
     /**
@@ -84,6 +142,7 @@
     function onDataError(err) {
       const msg = (err && (err.message || err.toString())) || 'Unknown server error';
       showStatus('Operation failed: ' + msg, 'error');
+      showNotification(`Error\n${msg}`, '❌', 'error', 5000);
     }
 
     /**
@@ -95,7 +154,6 @@
       const rows = rawData.rows;
       const latest = rows[rows.length - 1];
 
-      // raw row structure: [timestamp, open, completed, overdue, severity]
       const totalOpen = typeof latest[1] === 'number' ? latest[1] : 0;
       const completed = typeof latest[2] === 'number' ? latest[2] : 0;
       const overdue = typeof latest[3] === 'number' ? latest[3] : 0;
@@ -176,12 +234,6 @@
 
     /**
      * Builds and draws the Stacked Line/Area Chart with Overdue Severity Line Overlay.
-     * DataTable Columns:
-     *   0: Time
-     *   1: On-Time Open (stacked area/line)
-     *   2: Overdue (stacked area/line)
-     *   3: Completed (stacked area/line)
-     *   4: Overdue Severity (standalone line overlay on right axis)
      */
     function drawStackedLineComboChart() {
       const chartContainer = document.getElementById('mainChart');
@@ -252,7 +304,6 @@
         return;
       }
 
-      // Restore container if previously displaying empty placeholder
       if (chartContainer.querySelector('.loading-spinner')) {
         chartContainer.innerHTML = '';
         mainChartInstance = null;
@@ -287,9 +338,7 @@
     }
 
     /**
-     * Constructs a decomposed DataTable where open tasks are split into On-Time Open and Overdue
-     * to eliminate double-counting when stacked.
-     * @return {google.visualization.DataTable|null}
+     * Constructs a decomposed DataTable where open tasks are split into On-Time Open and Overdue.
      */
     function buildDecomposedDataTable() {
       if (!rawData || !rawData.rows) return null;
@@ -323,9 +372,7 @@
         const overdue = typeof row[3] === 'number' ? Math.max(0, row[3]) : 0;
         const severity = typeof row[4] === 'number' ? Math.max(0, row[4]) : 0;
 
-        // Eliminate double-counting: On-Time = Total Open - Overdue
         const onTimeOpen = Math.max(0, totalOpen - overdue);
-
         validRows.push([dateObj, onTimeOpen, overdue, completed, severity]);
       }
 
@@ -366,6 +413,8 @@
         .withSuccessHandler((data) => {
           setButtonsDisabled(false);
           showStatus('Data reloaded successfully!', 'success');
+          const now = new Date();
+          showNotification(`Data Reloaded\n${now.toLocaleTimeString()}`, '🔄', 'info', 2000);
           onDataLoaded(data);
         })
         .withFailureHandler((err) => {
@@ -386,6 +435,10 @@
         .withSuccessHandler((data) => {
           setButtonsDisabled(false);
           showStatus('Sync completed successfully!', 'success');
+          if (data && data.rows && data.rows.length > 0) {
+            const latest = data.rows[data.rows.length - 1];
+            showNotification(`Sync Complete\n${latest[1]} open, ${latest[3]} overdue`, '✅', 'success', 3000);
+          }
           onDataLoaded(data);
         })
         .withFailureHandler((err) => {
@@ -413,6 +466,10 @@
         .withSuccessHandler((data) => {
           setButtonsDisabled(false);
           showStatus('Completed tasks purged and snapshot persisted successfully!', 'success');
+          if (data && data.rows && data.rows.length > 0) {
+            const latest = data.rows[data.rows.length - 1];
+            showNotification(`Completed tasks purged\n${latest[2]} tasks cleared`, '🔥', 'success', 4000);
+          }
           onDataLoaded(data);
         })
         .withFailureHandler((err) => {
@@ -441,12 +498,15 @@
         .withSuccessHandler((result) => {
           setButtonsDisabled(false);
           if (!result || !result.success) {
-            showStatus('Prune failed: ' + ((result && result.error) || 'Unknown error'), 'error');
+            const errMsg = (result && result.error) || 'Unknown error';
+            showStatus('Prune failed: ' + errMsg, 'error');
+            showNotification(`Prune failed\n${errMsg}`, '❌', 'error', 5000);
             return;
           }
 
           showPruneResultModal(result);
           showStatus('Pruning complete. Refreshing dashboard...', 'success');
+          showNotification(`Pruned ${result.totalPruned} rows\nReduced to 1/day`, '🧹', 'success', 4000);
           fetchData();
         })
         .withFailureHandler((err) => {
@@ -494,6 +554,12 @@
       google.script.run
         .withSuccessHandler((isActive) => {
           showStatus('Automated background trigger ' + (isActive ? 'enabled' : 'disabled') + '.', 'success');
+          showNotification(
+            isActive ? 'Auto-sync Enabled\nEvery 3 hours' : 'Auto-sync Disabled\nManual sync only',
+            isActive ? '⚡' : '🛑',
+            'success',
+            2000
+          );
           const triggerBox = document.getElementById('toggleAutoTrigger');
           if (triggerBox) triggerBox.checked = isActive;
         })
