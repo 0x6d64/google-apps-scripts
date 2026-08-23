@@ -18,7 +18,8 @@ a sublinear $\sqrt{\text{days}}$ scaling to mitigate extreme outlier distortion.
 * apps script: gets triggered by a timed trigger (e.g. every 3 hours). it reads
   all task lists, aggregates the metrics into a single total, and updates a
   specific google sheet with a single timestamped row. Automatically creates and
-  initializes the Google Sheet if it does not yet exist
+  initializes the Google Sheet if it does not yet exist. Automatically installs the
+  3-hour background trigger on first launch if `AUTO_SYNC_ENABLED` property is unset
 * google sheet: serves as a storage, no special logic attached
 * HTML component: serves an HTML site with a dashboard that reads data from the
   Google sheet and plots the aggregated time series with interactive toggles,
@@ -44,6 +45,9 @@ rely on the Google auth for access.
 * **Auto-creation & Initialization of Sheet:**
   * Checks Script Properties for an existing `SPREADSHEET_ID`
   * If missing or invalid, automatically creates a new Google Spreadsheet (e.g. `"Google Tasks Metrics Storage"`), initializes the header row (`timestamp`, `open`, `completed`, `overdue`, `overdue_severity`), and saves the spreadsheet ID to Script Properties
+* **Auto-Sync Trigger Default State:**
+  * Checks Script Properties for `AUTO_SYNC_ENABLED`. If unset (first run), initializes the property to `'true'` and installs the recurring 3-hour trigger (`everyHours(3)`).
+  * Exposes `setTriggerEnabled(bool)` which updates the Script Property and adds/removes the Apps Script project trigger accordingly.
 * Append a single timestamped row of aggregate metrics to the Google Sheet per run
 * Scheduled time-driven trigger for automated collection
 * Implement `doGet()` to serve the dashboard and supply sheet data
@@ -75,8 +79,10 @@ rely on the Google auth for access.
   * **Date Range Filtering:** Quick-select range filters (e.g., 7 Days, 14 Days, 30 Days, All Time) and custom date inputs to dynamically filter rows (e.g., via `DataView.setRows()` or Google Charts `ChartRangeFilter`) without backend roundtrips
 * **Action Controls & Housekeeping:**
   * **Sync Now**: Triggers immediate data ingestion and refreshes chart client-side
-  * **Sync & Clear Done Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears completed tasks across all lists from Google Tasks
-  * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
+  * **Danger Zone Section**:
+    * **Auto-Sync Toggle**: Control for the automated 3-hour background sync trigger (enabled by default via Script Properties)
+    * **Sync & Clear Done Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears completed tasks across all lists from Google Tasks
+    * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
 * Lightweight responsive styling for desktop and mobile
 
 ## Workflows

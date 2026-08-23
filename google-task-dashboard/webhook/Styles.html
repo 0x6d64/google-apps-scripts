@@ -264,17 +264,6 @@
     cursor: pointer;
   }
 
-  .trigger-toggle-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    cursor: pointer;
-    user-select: none;
-  }
-
   /* Panel */
   .panel {
     background: var(--surface);
@@ -327,8 +316,8 @@
 
   /* Danger Zone */
   .danger-zone-panel {
-    border-color: #fce8e6;
-    background: #fffafa;
+    border-color: #fad2cf;
+    background: #fffbfa;
   }
 
   .danger-zone-summary {
@@ -351,9 +340,28 @@
     border-top: 1px dashed #fad2cf;
   }
 
-  .danger-zone-content p {
-    margin: 0 0 12px;
-    font-size: 13px;
+  .danger-zone-setting {
+    background: #fff;
+    border: 1px solid #fad2cf;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+  }
+
+  .trigger-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .setting-desc {
+    margin: 4px 0 0 24px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 

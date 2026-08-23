@@ -70,9 +70,10 @@
         if (link) link.href = data.sheetUrl;
       }
 
-      if (typeof data.triggerActive === 'boolean') {
-        const triggerBox = document.getElementById('toggleAutoTrigger');
-        if (triggerBox) triggerBox.checked = data.triggerActive;
+      const triggerBox = document.getElementById('toggleAutoTrigger');
+      if (triggerBox) {
+        // Active by default or per backend state
+        triggerBox.checked = (typeof data.triggerActive === 'boolean') ? data.triggerActive : true;
       }
 
       updateKPIsAndStaleness();
@@ -216,6 +217,12 @@
         return;
       }
 
+      // Restore container if previously showing empty spinner
+      if (chartContainer.querySelector('.loading-spinner')) {
+        chartContainer.innerHTML = '';
+        mainChartInstance = null; // Re-instantiate on clean element
+      }
+
       dataView.setColumns(visibleCols);
 
       const tzLabel = getLocalTimezoneLabel();
@@ -274,6 +281,12 @@
       if (volCols.length === 1) {
         chartContainer.innerHTML = '<div class="loading-spinner">No task count series active.</div>';
         return;
+      }
+
+      // Restore container if previously showing empty spinner
+      if (chartContainer.querySelector('.loading-spinner')) {
+        chartContainer.innerHTML = '';
+        volumeChartInstance = null; // Re-instantiate on clean element
       }
 
       dataView.setColumns(volCols);
@@ -355,7 +368,7 @@
     }
 
     /**
-     * Handles series checkbox toggles.
+     * Handles series checkbox toggles and re-renders.
      */
     function updateChartVisibility() {
       renderCharts();
@@ -447,7 +460,6 @@
      * @param {Object} result
      */
     function showPruneResultModal(result) {
-      // Remove any existing modal
       const existing = document.getElementById('pruneResultModal');
       if (existing) existing.remove();
 

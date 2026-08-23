@@ -4,6 +4,7 @@
 
 const SPREADSHEET_PROP_KEY = 'SPREADSHEET_ID';
 const LAST_SYNC_PROP_KEY = 'LAST_SYNC_TIME';
+const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
 const SYNC_LOCK_COOLDOWN_MS = 10000; // 10 seconds debounce lock
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
 const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
@@ -12,6 +13,9 @@ const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_sev
  * Serves the web dashboard HTML interface.
  */
 function doGet() {
+  // Ensure default auto-sync setting & trigger exist
+  ensureAutoSyncDefault();
+
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
     .setTitle('Google Tasks Dashboard')
@@ -419,25 +423,65 @@ function releaseSyncLock() {
 }
 
 /**
- * Checks if the automated background trigger is installed.
+ * Checks if the automated background trigger is installed and property enabled.
  * @return {boolean}
  */
 function isTriggerActive() {
+  const scriptProps = PropertiesService.getScriptProperties();
+  const propVal = scriptProps.getProperty(AUTO_SYNC_PROP_KEY);
+  if (propVal !== null) {
+    return propVal === 'true';
+  }
+
+  // Fallback to checking project triggers directly
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'ingestTaskMetrics') {
       return true;
     }
   }
-  return false;
+  return true; // Default is true if unset
 }
 
 /**
- * Toggles the automated 3-hour background trigger.
+ * Ensures AUTO_SYNC_ENABLED property and background trigger are initialized by default.
+ */
+function ensureAutoSyncDefault() {
+  const scriptProps = PropertiesService.getScriptProperties();
+  const propVal = scriptProps.getProperty(AUTO_SYNC_PROP_KEY);
+
+  if (propVal === null) {
+    // First time setup: set property to 'true' and install trigger
+    scriptProps.setProperty(AUTO_SYNC_PROP_KEY, 'true');
+    setTriggerEnabled(true);
+  } else if (propVal === 'true') {
+    // Ensure trigger actually exists if property is true
+    const triggers = ScriptApp.getProjectTriggers();
+    let triggerExists = false;
+    for (let i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'ingestTaskMetrics') {
+        triggerExists = true;
+        break;
+      }
+    }
+    if (!triggerExists) {
+      ScriptApp.newTrigger('ingestTaskMetrics')
+        .timeBased()
+        .everyHours(3)
+        .create();
+    }
+  }
+}
+
+/**
+ * Sets the auto-sync property and updates the project trigger.
  * @param {boolean} enable
  * @return {boolean} New active state
  */
 function setTriggerEnabled(enable) {
+  const scriptProps = PropertiesService.getScriptProperties();
+  scriptProps.setProperty(AUTO_SYNC_PROP_KEY, enable ? 'true' : 'false');
+
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'ingestTaskMetrics') {

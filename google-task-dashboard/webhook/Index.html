@@ -90,13 +90,6 @@
           </label>
         </div>
       </div>
-
-      <div class="control-group trigger-toggle-group">
-        <label class="trigger-toggle-label">
-          <input type="checkbox" id="toggleAutoTrigger" onchange="DashboardApp.handleTriggerToggle(this.checked)">
-          <span>Auto-sync (every 3h)</span>
-        </label>
-      </div>
     </section>
 
     <!-- Primary Dual-Axis Time Series Chart -->
@@ -122,15 +115,20 @@
 
     <!-- Collapsible Danger Zone for Housekeeping -->
     <section class="panel danger-zone-panel">
-      <details class="danger-zone-details">
+      <details class="danger-zone-details" open>
         <summary class="danger-zone-summary">
-          <span>⚠️ <strong>Danger Zone: Task Housekeeping & Cleanup</strong></span>
+          <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
           <span class="summary-arrow">▼</span>
         </summary>
         <div class="danger-zone-content">
-          <p>
-            Persist a final snapshot to the Google Sheet and permanently clear/archive all completed tasks across all your Google Task lists.
-          </p>
+          <div class="danger-zone-setting">
+            <label class="trigger-toggle-label">
+              <input type="checkbox" id="toggleAutoTrigger" checked onchange="DashboardApp.handleTriggerToggle(this.checked)">
+              <strong>Automated Background Sync (every 3 hours)</strong>
+            </label>
+            <p class="setting-desc">When enabled, Apps Script captures snapshot metrics in the Google Sheet every 3 hours automatically.</p>
+          </div>
+
           <div class="danger-zone-actions">
             <button id="btnSyncClear" class="btn btn-danger" onclick="DashboardApp.handleSyncAndClear()">
               <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
