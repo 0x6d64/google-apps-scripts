@@ -41,7 +41,7 @@ rely on the Google auth for access.
   * `open`: Count of incomplete tasks (`status != "completed"`). In the stacked charts, tasks are decomposed into non-overlapping mutually exclusive series: **On-Time Open** (`open - overdue`) and **Overdue** (`overdue`) so that stacking represents the true volume without double-counting.
   * `completed`: Count of completed tasks (`status == "completed"`)
   * `overdue`: Count of open tasks where `due < snapshot_timestamp`
-  * `overdue_severity`: Sublinear overdue debt score calculated as $\sum \sqrt{\max(0, \lfloor(\text{now} - \text{due}) / 1\,\text{day}\rfloor)}$ across all late open tasks. Applying the square root dampens the impact of extreme zombie-task outliers while still penalizing aging tasks progressively.
+  * `overdue_severity`: Sublinear overdue debt score calculated as $\sum \sqrt{\max(0, (\text{now} - \text{due}) / 1\,\text{day})}$ across all late open tasks. Fractional days are retained. Applying the square root dampens the impact of extreme zombie-task outliers while still penalizing aging tasks progressively.
 * **Auto-creation & Initialization of Sheet:**
   * Checks Script Properties for an existing `SPREADSHEET_ID`
   * If missing or invalid, automatically creates a new Google Spreadsheet (e.g. `"Google Tasks Metrics Storage"`), initializes the header row (`timestamp`, `open`, `completed`, `overdue`, `overdue_severity`), and saves the spreadsheet ID to Script Properties
@@ -82,7 +82,7 @@ rely on the Google auth for access.
     * *Severity Line Overlay (Right Y-Axis):* `Overdue Severity` (score based on $\sqrt{\text{days}}$) overlaid on the second vertical axis with prominent unstacked line and distinct points.
 * **Interactive Chart Features:**
   * **Series / Element Toggling:** Interactive toggle buttons/checkboxes allowing the user to show/hide specific metric series (e.g., toggle "On-Time Open", "Overdue", "Completed", "Overdue Severity") dynamically
-  * **Date Range Filtering:** Quick-select range filters (e.g., 7 Days, 14 Days, 30 Days, All Time) and custom date inputs to dynamically filter rows without backend roundtrips
+  * **Date Range Filtering:** Quick-select range filters (e.g., 3 Days, 7 Days, 14 Days, 30 Days, All Time) to dynamically filter rows without backend roundtrips
 * **Action Controls & Housekeeping (with descriptive tooltips):**
   * **View Sheet**: Direct link opening the backing Google Spreadsheet in Google Drive
   * **Reload Data**: Re-reads historical snapshots from the Google Sheet without calling the Google Tasks API (retrieves background sync updates)
@@ -92,7 +92,7 @@ rely on the Google auth for access.
     * **Delete Old Done Tasks (>8w)**: Selectively deletes tasks completed more than 8 weeks ago from Google Tasks, keeping recent completions intact
     * **Purge Completed Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears *all* completed tasks across all lists from Google Tasks
     * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
-* Lightweight responsive styling for desktop and mobile
+* Lightweight responsive styling for desktop and mobile. On small screens, the KPI summary cards are hidden and the header action buttons use a consistent responsive layout.
 
 ## Workflows
 
@@ -193,18 +193,23 @@ sequenceDiagram
     Done Tasks" feature, which safely persists the completion metrics before
     clearing done tasks across all lists. Google Tasks provides unique immutable
     `task.id`s, but individual IDs do not need to be stored in the sheet for
-    aggregate trend metrics.
+    aggregate trend metrics. `completed` represents the number of completed tasks
+    currently retained in Google Tasks at snapshot time; deleting completed
+    tasks can therefore cause a downward discontinuity in the metric, while
+    historical snapshots remain unchanged.
 
 ## Next steps and features
 
 * implement smoothing in the graphs: if a lot of data exist in a specific 
   period, don't plot them all
 * fix formatting of the buttons "📊 View Sheet 🔄 Reload Data ⚡ Sync now" 
-  since on mobile they get a different height all
-* on mobile: the cards that give the current numbers are too big, they 
-  should be somehow not shown then
+  since on mobile they get a consistent responsive layout
+* on mobile: hide the cards that give the current numbers
 * danger zone: dropdown icon needs to change shape when folded, right now it 
   stays "▼" also when folded (should only be this when unfolded)
-* I want to make the throughput configurable
-* confirm that the overdue age is calculated properly for fraction of days
-* in the graph views: we need a period that is shorter than 7 days, e.g. 3 days.
+* make the throughput time window configurable (default: 7 days) and calculate
+  throughput using the actual elapsed time between the oldest and newest
+  snapshots in the selected window
+* use fractional days for overdue age calculation instead of flooring to whole
+  days
+* in the graph views: add a period that is shorter than 7 days, e.g. 3 days
