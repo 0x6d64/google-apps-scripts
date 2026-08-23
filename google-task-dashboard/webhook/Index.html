@@ -131,9 +131,14 @@
           <p>
             Persist a final snapshot to the Google Sheet and permanently clear/archive all completed tasks across all your Google Task lists.
           </p>
-          <button id="btnSyncClear" class="btn btn-danger" onclick="DashboardApp.handleSyncAndClear()">
-            <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
-          </button>
+          <div class="danger-zone-actions">
+            <button id="btnSyncClear" class="btn btn-danger" onclick="DashboardApp.handleSyncAndClear()">
+              <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
+            </button>
+            <button id="btnPruneOldData" class="btn btn-secondary" onclick="DashboardApp.handlePruneOldData()">
+              <span class="btn-icon">🧹</span> Prune Old Data (>1 year)
+            </button>
+          </div>
         </div>
       </details>
     </section>

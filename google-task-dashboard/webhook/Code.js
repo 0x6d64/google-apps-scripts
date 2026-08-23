@@ -260,6 +260,141 @@ function syncAndClearTasks() {
 }
 
 /**
+ * Extracts UTC calendar date in 'YYYY-MM-DD' format.
+ * @param {string|Date} timestamp
+ * @return {string|null}
+ */
+function extractCalendarDate(timestamp) {
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Reduces all rows older than 1 year (365 days) to 1 snapshot per calendar day.
+ * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, totalPruned: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
+ */
+function pruneDataOlderThan1Year() {
+  const startTime = Date.now();
+  acquireSyncLock();
+
+  try {
+    const sheet = getOrCreateSheet();
+    const lastRow = sheet.getLastRow();
+    const totalDataRowsBefore = Math.max(0, lastRow - 1);
+
+    if (totalDataRowsBefore < 10) {
+      return {
+        success: false,
+        error: 'Insufficient rows to prune (only ' + totalDataRowsBefore + ' total). No action taken.',
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalPruned: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    const cutoffTimestamp = Date.now() - (365 * 24 * 60 * 60 * 1000);
+    const rangeValues = sheet.getRange(2, 1, totalDataRowsBefore, 1).getValues();
+
+    const seenDateKeys = {};
+    const rowsToDelete = [];
+
+    for (let i = 0; i < rangeValues.length; i++) {
+      const rawDate = rangeValues[i][0];
+      if (!rawDate) continue;
+
+      const dateObj = new Date(rawDate);
+      if (isNaN(dateObj.getTime())) continue;
+
+      const rowNumber = i + 2; // 1-based indexing + header offset
+
+      if (dateObj.getTime() >= cutoffTimestamp) {
+        // Recent data (< 1 year old); keep all intervals
+        continue;
+      }
+
+      // Old data (> 1 year old); keep only 1 snapshot per calendar day
+      const dateKey = extractCalendarDate(dateObj);
+      if (!dateKey) continue;
+
+      if (seenDateKeys[dateKey]) {
+        // Duplicate row for this old date; mark for deletion
+        rowsToDelete.push(rowNumber);
+      } else {
+        seenDateKeys[dateKey] = rowNumber;
+      }
+    }
+
+    Logger.log('[PRUNE] Total rows before: ' + totalDataRowsBefore + ', Marked for deletion: ' + rowsToDelete.length);
+
+    if (rowsToDelete.length === 0) {
+      return {
+        success: true,
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalPruned: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime,
+        message: 'All data is either less than 1 year old or already daily deduplicated. No pruning needed.'
+      };
+    }
+
+    // Safety threshold: abort if more than 80% of total rows would be pruned
+    if ((rowsToDelete.length / totalDataRowsBefore) > 0.80) {
+      return {
+        success: false,
+        error: 'Pruning would remove ' + ((rowsToDelete.length / totalDataRowsBefore) * 100).toFixed(1) + '% of data. Aborting as safety measure. Check data integrity.',
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalPruned: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    // Batch delete rows in reverse order from bottom to top to avoid index shifting
+    for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+      sheet.deleteRow(rowsToDelete[i]);
+    }
+
+    const totalDataRowsAfter = Math.max(0, sheet.getLastRow() - 1);
+    const totalPruned = totalDataRowsBefore - totalDataRowsAfter;
+    const percentageRemoved = totalDataRowsBefore > 0 ? Number(((totalPruned / totalDataRowsBefore) * 100).toFixed(1)) : 0;
+    const durationMs = Date.now() - startTime;
+
+    Logger.log('[PRUNE] Finished in ' + durationMs + 'ms. Rows remaining: ' + totalDataRowsAfter);
+
+    return {
+      success: true,
+      totalBefore: totalDataRowsBefore,
+      totalAfter: totalDataRowsAfter,
+      totalPruned: totalPruned,
+      percentageRemoved: percentageRemoved,
+      durationMs: durationMs,
+      message: 'Pruned ' + totalPruned + ' rows. Kept ' + totalDataRowsAfter + '.'
+    };
+  } catch (err) {
+    Logger.log('[PRUNE] Error: ' + err);
+    return {
+      success: false,
+      error: (err && (err.message || err.toString())) || 'Unknown pruning error',
+      totalBefore: 0,
+      totalAfter: 0,
+      totalPruned: 0,
+      percentageRemoved: 0,
+      durationMs: Date.now() - startTime
+    };
+  } finally {
+    releaseSyncLock();
+  }
+}
+
+/**
  * Lock acquisition to prevent concurrent sync operations (10s cooldown).
  */
 function acquireSyncLock() {
@@ -269,7 +404,7 @@ function acquireSyncLock() {
 
   if (lastSync && (now - lastSync) < SYNC_LOCK_COOLDOWN_MS) {
     const waitSec = Math.ceil((SYNC_LOCK_COOLDOWN_MS - (now - lastSync)) / 1000);
-    throw new Error('A sync is already in progress or completed recently. Please wait ' + waitSec + 's.');
+    throw new Error('A sync or maintenance task is already in progress. Please wait ' + waitSec + 's.');
   }
 
   scriptProps.setProperty(LAST_SYNC_PROP_KEY, String(now));

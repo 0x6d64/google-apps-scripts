@@ -409,6 +409,70 @@
     }
 
     /**
+     * Triggers manual pruning of records older than 1 year to 1 per day.
+     */
+    function handlePruneOldData() {
+      const confirmed = confirm(
+        '⚠️ PRUNE DATA OLDER THAN 1 YEAR\n\n' +
+        'This will reduce all data older than 12 months to 1 entry per day, removing intermediate snapshots.\n\n' +
+        'Your recent data (<1 year) remains untouched.\n\n' +
+        'Continue?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Pruning snapshots older than 1 year down to 1 per day...', 'info');
+
+      google.script.run
+        .withSuccessHandler((result) => {
+          setButtonsDisabled(false);
+          if (!result || !result.success) {
+            showStatus('Prune failed: ' + ((result && result.error) || 'Unknown error'), 'error');
+            return;
+          }
+
+          showPruneResultModal(result);
+          showStatus('Pruning complete. Refreshing dashboard...', 'success');
+          fetchData();
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .pruneDataOlderThan1Year();
+    }
+
+    /**
+     * Displays a clean formatted result modal with pruning statistics.
+     * @param {Object} result
+     */
+    function showPruneResultModal(result) {
+      // Remove any existing modal
+      const existing = document.getElementById('pruneResultModal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'pruneResultModal';
+      modal.className = 'modal-overlay';
+      modal.innerHTML = `
+        <div class="modal-card">
+          <h3>✅ Pruning Complete</h3>
+          <table class="prune-stats-table">
+            <tr><td>Total rows before:</td><td>${result.totalBefore}</td></tr>
+            <tr><td>Rows pruned:</td><td>${result.totalPruned}</td></tr>
+            <tr><td>Rows remaining:</td><td>${result.totalAfter}</td></tr>
+            <tr><td>Percentage removed:</td><td>${Number(result.percentageRemoved || 0).toFixed(1)}%</td></tr>
+            <tr><td>Execution time:</td><td>${result.durationMs}ms</td></tr>
+          </table>
+          <div class="modal-footer">
+            <button class="btn btn-primary" onclick="document.getElementById('pruneResultModal').remove()">Close</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    /**
      * Toggles 3-hour automated background sync trigger.
      * @param {boolean} enable
      */
@@ -427,8 +491,10 @@
     function setButtonsDisabled(disabled) {
       const btnSync = document.getElementById('btnSyncNow');
       const btnClear = document.getElementById('btnSyncClear');
+      const btnPrune = document.getElementById('btnPruneOldData');
       if (btnSync) btnSync.disabled = disabled;
       if (btnClear) btnClear.disabled = disabled;
+      if (btnPrune) btnPrune.disabled = disabled;
     }
 
     function showStatus(message, type) {
@@ -451,6 +517,7 @@
       updateChartVisibility: updateChartVisibility,
       handleSyncNow: handleSyncNow,
       handleSyncAndClear: handleSyncAndClear,
+      handlePruneOldData: handlePruneOldData,
       handleTriggerToggle: handleTriggerToggle
     };
   })();
