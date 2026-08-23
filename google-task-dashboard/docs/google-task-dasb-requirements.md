@@ -9,16 +9,20 @@ metrics can be viewed as time series.
 The metrics are always tracked as an aggregate sum across all task lists (no
 per-list breakdown).
 
-The user shall be able to see a trend of tasks that are open, done, overdue, ...
+The user shall be able to see a trend of tasks that are open, done, overdue, and
+the compounding burden of overdue tasks via an "overdue severity" score that applies
+a sublinear $\sqrt{\text{days}}$ scaling to mitigate extreme outlier distortion.
 
 ## Components
 
 * apps script: gets triggered by a timed trigger (e.g. every 3 hours). it reads
   all task lists, aggregates the metrics into a single total, and updates a
-  specific google sheet with a single timestamped row
+  specific google sheet with a single timestamped row. Automatically creates and
+  initializes the Google Sheet if it does not yet exist
 * google sheet: serves as a storage, no special logic attached
 * HTML component: serves an HTML site with a dashboard that reads data from the
-  Google sheet and plots the aggregated time series
+  Google sheet and plots the aggregated time series with interactive toggles,
+  dual-axis charts, and date range filters
 
 ## Auth model
 
@@ -32,7 +36,14 @@ rely on the Google auth for access.
 ### apps script
 
 * Iterate across all available Google Task lists via `Tasks.Tasklists.list()`
-* Fetch task items from each list and calculate aggregate totals across all lists (sum of open, completed, overdue counts)
+* Fetch task items from each list and calculate aggregate totals across all lists:
+  * `open`: Count of incomplete tasks (`status != "completed"`)
+  * `completed`: Count of completed tasks (`status == "completed"`)
+  * `overdue`: Count of open tasks where `due < snapshot_timestamp`
+  * `overdue_severity`: Sublinear overdue debt score calculated as $\sum \sqrt{\max(0, \lfloor(\text{now} - \text{due}) / 1\,\text{day}\rfloor)}$ across all late open tasks. Applying the square root dampens the impact of extreme zombie-task outliers while still penalizing aging tasks progressively.
+* **Auto-creation & Initialization of Sheet:**
+  * Checks Script Properties for an existing `SPREADSHEET_ID`
+  * If missing or invalid, automatically creates a new Google Spreadsheet (e.g. `"Google Tasks Metrics Storage"`), initializes the header row (`timestamp`, `open`, `completed`, `overdue`, `overdue_severity`), and saves the spreadsheet ID to Script Properties
 * Append a single timestamped row of aggregate metrics to the Google Sheet per run
 * Scheduled time-driven trigger for automated collection
 * Implement `doGet()` to serve the dashboard and supply sheet data
@@ -42,18 +53,25 @@ rely on the Google auth for access.
 ### sheet
 
 * Dedicated spreadsheet serving as append-only time series log
-* Predefined column headers (timestamp, open, completed, overdue) — strictly single aggregated row per snapshot run
-* Spreadsheet ID configured in Script Properties
+* Predefined column headers: `timestamp`, `open`, `completed`, `overdue`, `overdue_severity` (single aggregated row per snapshot run)
+* Auto-created and maintained by Apps Script
 
 ### HTML component
 
 * Single-page dashboard served via Apps Script HTML Service
-* Time series charts (e.g. Chart.js / Google Charts) showing aggregate trends over time
-* Basic interactive filters (date range selector: 7 days, 30 days, all time)
-* Action buttons:
-  * **Sync Now**: Triggers immediate data ingestion and chart refresh
+* Responsive layout with top summary KPI cards (`Open Tasks`, `Completed`, `Overdue Count`, `Overdue Severity`)
+* **Chart Visualizations (Research-backed Recommendations):**
+  * **Dual-Axis Combo Time Series Chart (Primary Chart):**
+    * *Left Y-Axis (Lines):* Task volume counts (`Open`, `Completed`, `Overdue`)
+    * *Right Y-Axis (Area / Shaded Line):* `Overdue Severity` (score based on $\sqrt{\text{days}}$), preventing scale distortion against lower count values while clearly displaying backlog aging trends
+  * **Daily Completion / Throughput Chart:** Column chart tracking task completions per day/interval
+* **Interactive Chart Features:**
+  * **Series / Element Toggling:** Interactive toggle buttons/checkboxes allowing the user to show/hide specific metric series (e.g., toggle "Open", "Completed", "Overdue", "Overdue Severity") dynamically (e.g., using `google.visualization.DataView.setColumns()`)
+  * **Date Range Filtering:** Quick-select range filters (e.g., 7 Days, 14 Days, 30 Days, All Time) and custom date inputs to dynamically filter rows (e.g., via `DataView.setRows()` or Google Charts `ChartRangeFilter`) without backend roundtrips
+* **Action Buttons:**
+  * **Sync Now**: Triggers immediate data ingestion and refreshes chart client-side
   * **Sync & Clear Done Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears completed tasks across all lists from Google Tasks
-* Lightweight responsive layout
+* Lightweight responsive styling for desktop and mobile
 
 ## Workflows
 
@@ -70,10 +88,11 @@ sequenceDiagram
 
     User->>Frontend: Clicks "Sync & Clear Done Tasks"
     Frontend->>AppsScript: Trigger syncAndClearTasks()
+    AppsScript->>AppsScript: Ensure Sheet exists (auto-create if missing)
     loop For each task list
-        AppsScript->>TasksAPI: Fetch current tasks & accumulate totals
+        AppsScript->>TasksAPI: Fetch current tasks & accumulate totals (open, done, overdue, overdue_severity)
     end
-    AppsScript->>Sheet: Append single timestamped aggregate row (timestamp, open, completed, overdue)
+    AppsScript->>Sheet: Append single timestamped row (timestamp, open, completed, overdue, overdue_severity)
     Note over AppsScript,Sheet: Total snapshot safely persisted in sheet!
     loop For each task list
         AppsScript->>TasksAPI: Call Tasks.clear(listId)
