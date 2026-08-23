@@ -42,7 +42,7 @@
       <div class="card card-blue">
         <div class="label">Open Tasks</div>
         <div class="value" id="kpiOpen">-</div>
-        <div class="subtext">Active backlog</div>
+        <div class="subtext" id="kpiOpenSubtext">Total incomplete</div>
       </div>
 
       <div class="card card-green">
@@ -69,9 +69,9 @@
       <div class="control-group">
         <span class="control-label">Range:</span>
         <div class="pill-group" id="rangeFilterGroup">
-          <button class="pill" data-range="7" title="Filter charts to show snapshots from the past 7 days" onclick="DashboardApp.setRangeFilter(7)">7D</button>
-          <button class="pill" data-range="14" title="Filter charts to show snapshots from the past 14 days" onclick="DashboardApp.setRangeFilter(14)">14D</button>
-          <button class="pill active" data-range="30" title="Filter charts to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
+          <button class="pill" data-range="7" title="Filter chart to show snapshots from the past 7 days" onclick="DashboardApp.setRangeFilter(7)">7D</button>
+          <button class="pill" data-range="14" title="Filter chart to show snapshots from the past 14 days" onclick="DashboardApp.setRangeFilter(14)">14D</button>
+          <button class="pill active" data-range="30" title="Filter chart to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
           <button class="pill" data-range="all" title="Show all historical snapshot entries" onclick="DashboardApp.setRangeFilter('all')">All</button>
         </div>
       </div>
@@ -79,39 +79,29 @@
       <div class="control-group">
         <span class="control-label">Series:</span>
         <div class="pill-group" id="seriesToggleGroup">
-          <label class="toggle-pill pill-open" title="Toggle visibility of incomplete Open Tasks count">
-            <input type="checkbox" id="toggleOpen" checked onchange="DashboardApp.updateChartVisibility()"> Open
+          <label class="toggle-pill pill-open" title="Toggle On-Time Open Tasks (stacked line/area)">
+            <input type="checkbox" id="toggleOpen" checked onchange="DashboardApp.updateChartVisibility()"> On-Time Open
           </label>
-          <label class="toggle-pill pill-completed" title="Toggle visibility of Completed Tasks count">
-            <input type="checkbox" id="toggleCompleted" checked onchange="DashboardApp.updateChartVisibility()"> Completed
-          </label>
-          <label class="toggle-pill pill-overdue" title="Toggle visibility of Overdue Tasks count">
+          <label class="toggle-pill pill-overdue" title="Toggle Overdue Tasks (stacked line/area)">
             <input type="checkbox" id="toggleOverdue" checked onchange="DashboardApp.updateChartVisibility()"> Overdue
           </label>
-          <label class="toggle-pill pill-severity" title="Toggle visibility of Overdue Severity score (√days cumulative debt)">
-            <input type="checkbox" id="toggleSeverity" checked onchange="DashboardApp.updateChartVisibility()"> Severity (√days)
+          <label class="toggle-pill pill-completed" title="Toggle Completed Tasks (stacked line/area)">
+            <input type="checkbox" id="toggleCompleted" checked onchange="DashboardApp.updateChartVisibility()"> Completed
+          </label>
+          <label class="toggle-pill pill-severity" title="Toggle Overdue Severity score (overlay line on right axis)">
+            <input type="checkbox" id="toggleSeverity" checked onchange="DashboardApp.updateChartVisibility()"> Severity (√days Line)
           </label>
         </div>
       </div>
     </section>
 
-    <!-- Primary Dual-Axis Time Series Chart -->
+    <!-- Primary Stacked Line + Dual Axis Overlay Combo Chart -->
     <section class="panel">
       <div class="panel-header">
-        <h2>Task Volume & Aging Severity Trend</h2>
-        <span class="panel-badge">Dual Axis</span>
+        <h2>Task Volume Breakdown & Overdue Severity Trend</h2>
+        <span class="panel-badge">Stacked Lines + Severity Overlay</span>
       </div>
       <div id="mainChart" class="chart-container">
-        <div class="loading-spinner">Loading chart data...</div>
-      </div>
-    </section>
-
-    <!-- Throughput / Completed Chart -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>Historical Task Volume Log</h2>
-      </div>
-      <div id="volumeChart" class="chart-container">
         <div class="loading-spinner">Loading chart data...</div>
       </div>
     </section>

@@ -38,7 +38,7 @@ rely on the Google auth for access.
 
 * Iterate across all available Google Task lists via `Tasks.Tasklists.list()`
 * Fetch task items from each list and calculate aggregate totals across all lists:
-  * `open`: Count of incomplete tasks (`status != "completed"`)
+  * `open`: Count of incomplete tasks (`status != "completed"`). In the stacked charts, tasks are decomposed into non-overlapping mutually exclusive series: **On-Time Open** (`open - overdue`) and **Overdue** (`overdue`) so that stacking represents the true volume without double-counting.
   * `completed`: Count of completed tasks (`status == "completed"`)
   * `overdue`: Count of open tasks where `due < snapshot_timestamp`
   * `overdue_severity`: Sublinear overdue debt score calculated as $\sum \sqrt{\max(0, \lfloor(\text{now} - \text{due}) / 1\,\text{day}\rfloor)}$ across all late open tasks. Applying the square root dampens the impact of extreme zombie-task outliers while still penalizing aging tasks progressively.
@@ -70,14 +70,13 @@ rely on the Google auth for access.
 
 * Single-page dashboard served via Apps Script HTML Service
 * Responsive layout with top summary KPI cards (`Open Tasks`, `Completed`, `Overdue Count`, `Overdue Severity`)
-* **Chart Visualizations (Research-backed Recommendations):**
-  * **Dual-Axis Combo Time Series Chart (Primary Chart):**
-    * *Left Y-Axis (Lines):* Task volume counts (`Open`, `Completed`, `Overdue`)
-    * *Right Y-Axis (Area / Shaded Line):* `Overdue Severity` (score based on $\sqrt{\text{days}}$), preventing scale distortion against lower count values while clearly displaying backlog aging trends
-  * **Daily Completion / Throughput Chart:** Column chart tracking task completions per day/interval
+* **Chart Visualizations:**
+  * **Stacked Area/Line + Dual-Axis Overlay Chart (Primary Chart):**
+    * *Stacked Volume (Left Y-Axis):* Stacked lines with area shading decomposing tasks into non-overlapping mutually exclusive layers: **On-Time Open** (`open - overdue`), **Overdue** (`overdue`), and **Completed** (`completed`). Stacking preserves total volume without double-counting overdue tasks.
+    * *Severity Line Overlay (Right Y-Axis):* `Overdue Severity` (score based on $\sqrt{\text{days}}$) overlaid on the second vertical axis with prominent unstacked line and distinct points.
 * **Interactive Chart Features:**
-  * **Series / Element Toggling:** Interactive toggle buttons/checkboxes allowing the user to show/hide specific metric series (e.g., toggle "Open", "Completed", "Overdue", "Overdue Severity") dynamically (e.g., using `google.visualization.DataView.setColumns()`)
-  * **Date Range Filtering:** Quick-select range filters (e.g., 7 Days, 14 Days, 30 Days, All Time) and custom date inputs to dynamically filter rows (e.g., via `DataView.setRows()` or Google Charts `ChartRangeFilter`) without backend roundtrips
+  * **Series / Element Toggling:** Interactive toggle buttons/checkboxes allowing the user to show/hide specific metric series (e.g., toggle "On-Time Open", "Overdue", "Completed", "Overdue Severity") dynamically
+  * **Date Range Filtering:** Quick-select range filters (e.g., 7 Days, 14 Days, 30 Days, All Time) and custom date inputs to dynamically filter rows without backend roundtrips
 * **Action Controls & Housekeeping (with descriptive tooltips):**
   * **View Sheet**: Direct link opening the backing Google Spreadsheet in Google Drive
   * **Reload Data**: Re-reads historical snapshots from the Google Sheet without calling the Google Tasks API (retrieves background sync updates)

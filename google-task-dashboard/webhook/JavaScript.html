@@ -6,17 +6,16 @@
     let rawData = null;
     let activeRangeDays = 30;
     let mainChartInstance = null;
-    let volumeChartInstance = null;
     let resizeTimer = null;
 
     /**
-     * Color definitions for consistent series visualization.
+     * Color definitions for consistent stacked line/area and overlay line visualization.
      */
     const SERIES_COLORS = {
-      open: '#1a73e8',       // Blue
-      completed: '#188038',  // Green
-      overdue: '#d93025',    // Red
-      severity: '#a142f4'    // Purple
+      onTimeOpen: '#1a73e8', // Blue (On-time open tasks)
+      overdue: '#d93025',    // Red (Overdue open tasks)
+      completed: '#188038',  // Green (Completed tasks)
+      severity: '#a142f4'    // Purple (Severity line overlay on right axis)
     };
 
     /**
@@ -61,7 +60,6 @@
         return;
       }
 
-      // Store a deep clone to protect against accidental mutation
       rawData = JSON.parse(JSON.stringify(data));
       hideStatus();
 
@@ -97,12 +95,19 @@
       const rows = rawData.rows;
       const latest = rows[rows.length - 1];
 
-      setElemText('kpiOpen', latest[1]);
-      setElemText('kpiCompleted', latest[2]);
-      setElemText('kpiOverdue', latest[3]);
-      setElemText('kpiSeverity', latest[4]);
+      // raw row structure: [timestamp, open, completed, overdue, severity]
+      const totalOpen = typeof latest[1] === 'number' ? latest[1] : 0;
+      const completed = typeof latest[2] === 'number' ? latest[2] : 0;
+      const overdue = typeof latest[3] === 'number' ? latest[3] : 0;
+      const severity = typeof latest[4] === 'number' ? latest[4] : 0;
+      const onTime = Math.max(0, totalOpen - overdue);
 
-      // Staleness / Last Updated Indicator (Local Timezone labeled)
+      setElemText('kpiOpen', totalOpen);
+      setElemText('kpiOpenSubtext', onTime + ' on-time + ' + overdue + ' overdue');
+      setElemText('kpiCompleted', completed);
+      setElemText('kpiOverdue', overdue);
+      setElemText('kpiSeverity', severity);
+
       const lastDate = new Date(latest[0]);
       if (!isNaN(lastDate.getTime())) {
         const diffMins = Math.floor((Date.now() - lastDate.getTime()) / 60000);
@@ -111,7 +116,6 @@
         setElemText('lastUpdatedSubtext', 'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
       }
 
-      // Calculate 7-day velocity (completed tasks change over recent week)
       calculateVelocity(rows);
     }
 
@@ -136,12 +140,11 @@
     }
 
     /**
-     * Re-renders both the primary and secondary charts.
+     * Re-renders the primary chart.
      */
     function renderCharts() {
       if (!rawData || !rawData.rows || rawData.rows.length === 0) return;
-      drawMainDualAxisChart();
-      drawVolumeChart();
+      drawStackedLineComboChart();
     }
 
     /**
@@ -172,13 +175,19 @@
     }
 
     /**
-     * Builds and draws the primary Dual-Axis Combo Time Series Chart.
+     * Builds and draws the Stacked Line/Area Chart with Overdue Severity Line Overlay.
+     * DataTable Columns:
+     *   0: Time
+     *   1: On-Time Open (stacked area/line)
+     *   2: Overdue (stacked area/line)
+     *   3: Completed (stacked area/line)
+     *   4: Overdue Severity (standalone line overlay on right axis)
      */
-    function drawMainDualAxisChart() {
+    function drawStackedLineComboChart() {
       const chartContainer = document.getElementById('mainChart');
       if (!chartContainer) return;
 
-      const dataTable = buildFilteredDataTable();
+      const dataTable = buildDecomposedDataTable();
       if (!dataTable || dataTable.getNumberOfRows() === 0) {
         chartContainer.innerHTML = '<div class="loading-spinner">No snapshots available for the selected date range.</div>';
         return;
@@ -190,25 +199,52 @@
       let activeSeriesIdx = 0;
 
       const showOpen = isChecked('toggleOpen');
-      const showCompleted = isChecked('toggleCompleted');
       const showOverdue = isChecked('toggleOverdue');
+      const showCompleted = isChecked('toggleCompleted');
       const showSeverity = isChecked('toggleSeverity');
 
+      // 1. Stacked Lines/Areas on Axis 0 (mutually exclusive segments)
       if (showOpen) {
-        visibleCols.push(1);
-        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 0, color: SERIES_COLORS.open, type: 'line', lineWidth: 3 };
-      }
-      if (showCompleted) {
-        visibleCols.push(2);
-        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 0, color: SERIES_COLORS.completed, type: 'line', lineWidth: 2 };
+        visibleCols.push(1); // On-Time Open
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.onTimeOpen,
+          areaOpacity: 0.25,
+          lineWidth: 3
+        };
       }
       if (showOverdue) {
-        visibleCols.push(3);
-        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 0, color: SERIES_COLORS.overdue, type: 'line', lineWidth: 2 };
+        visibleCols.push(2); // Overdue
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.overdue,
+          areaOpacity: 0.35,
+          lineWidth: 3
+        };
       }
+      if (showCompleted) {
+        visibleCols.push(3); // Completed
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.completed,
+          areaOpacity: 0.20,
+          lineWidth: 2
+        };
+      }
+
+      // 2. Line Overlay on Axis 1 (Severity Debt Score)
       if (showSeverity) {
-        visibleCols.push(4);
-        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 1, color: SERIES_COLORS.severity, type: 'area', areaOpacity: 0.15, lineWidth: 2 };
+        visibleCols.push(4); // Severity
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'line',
+          targetAxisIndex: 1,
+          color: SERIES_COLORS.severity,
+          lineWidth: 3,
+          pointSize: 5
+        };
       }
 
       if (visibleCols.length === 1) {
@@ -216,6 +252,7 @@
         return;
       }
 
+      // Restore container if previously displaying empty placeholder
       if (chartContainer.querySelector('.loading-spinner')) {
         chartContainer.innerHTML = '';
         mainChartInstance = null;
@@ -225,10 +262,11 @@
 
       const tzLabel = getLocalTimezoneLabel();
       const options = {
-        seriesType: 'line',
+        seriesType: 'area',
+        isStacked: true,
         series: seriesConfig,
         vAxes: {
-          0: { title: 'Task Volume', minValue: 0, gridlines: { color: '#f1f3f4' } },
+          0: { title: 'Task Volume (Stacked)', minValue: 0, gridlines: { color: '#f1f3f4' } },
           1: { title: 'Overdue Severity (√days)', minValue: 0, gridlines: { color: 'transparent' } }
         },
         hAxis: {
@@ -237,7 +275,7 @@
         },
         legend: { position: 'top', alignment: 'end' },
         chartArea: { left: 60, right: 70, top: 30, bottom: 60, width: '85%', height: '75%' },
-        pointSize: 4,
+        pointSize: 3,
         interpolateNulls: true,
         backgroundColor: 'transparent'
       };
@@ -249,75 +287,19 @@
     }
 
     /**
-     * Builds and draws the secondary volume column chart.
-     * Guarantees exact 1-to-1 color and column alignment.
-     */
-    function drawVolumeChart() {
-      const chartContainer = document.getElementById('volumeChart');
-      if (!chartContainer) return;
-
-      const dataTable = buildFilteredDataTable();
-      if (!dataTable || dataTable.getNumberOfRows() === 0) return;
-
-      const dataView = new google.visualization.DataView(dataTable);
-      const volCols = [0];
-      const colColors = [];
-
-      if (isChecked('toggleOpen')) {
-        volCols.push(1);
-        colColors.push(SERIES_COLORS.open);
-      }
-      if (isChecked('toggleCompleted')) {
-        volCols.push(2);
-        colColors.push(SERIES_COLORS.completed);
-      }
-      if (isChecked('toggleOverdue')) {
-        volCols.push(3);
-        colColors.push(SERIES_COLORS.overdue);
-      }
-
-      if (volCols.length === 1) {
-        chartContainer.innerHTML = '<div class="loading-spinner">No task count series active.</div>';
-        return;
-      }
-
-      if (chartContainer.querySelector('.loading-spinner')) {
-        chartContainer.innerHTML = '';
-        volumeChartInstance = null;
-      }
-
-      dataView.setColumns(volCols);
-
-      const tzLabel = getLocalTimezoneLabel();
-      const options = {
-        isStacked: false,
-        colors: colColors,
-        vAxis: { title: 'Tasks', minValue: 0, gridlines: { color: '#f1f3f4' } },
-        hAxis: { title: 'Time (' + tzLabel + ')', gridlines: { color: '#f1f3f4' } },
-        legend: { position: 'top', alignment: 'end' },
-        chartArea: { left: 60, right: 30, top: 30, bottom: 60, width: '90%', height: '75%' },
-        backgroundColor: 'transparent'
-      };
-
-      if (!volumeChartInstance) {
-        volumeChartInstance = new google.visualization.ColumnChart(chartContainer);
-      }
-      volumeChartInstance.draw(dataView, options);
-    }
-
-    /**
-     * Constructs a safe, validated Google DataTable filtered by the active time window.
+     * Constructs a decomposed DataTable where open tasks are split into On-Time Open and Overdue
+     * to eliminate double-counting when stacked.
      * @return {google.visualization.DataTable|null}
      */
-    function buildFilteredDataTable() {
+    function buildDecomposedDataTable() {
       if (!rawData || !rawData.rows) return null;
 
       const dataTable = new google.visualization.DataTable();
       dataTable.addColumn('datetime', 'Time');
-      dataTable.addColumn('number', 'Open Tasks');
-      dataTable.addColumn('number', 'Completed Tasks');
-      dataTable.addColumn('number', 'Overdue Tasks');
-      dataTable.addColumn('number', 'Overdue Severity');
+      dataTable.addColumn('number', 'On-Time Open');
+      dataTable.addColumn('number', 'Overdue');
+      dataTable.addColumn('number', 'Completed');
+      dataTable.addColumn('number', 'Overdue Severity (√days)');
 
       const now = Date.now();
       const cutoff = activeRangeDays === 'all'
@@ -331,18 +313,20 @@
 
         let dateObj = new Date(row[0]);
         if (isNaN(dateObj.getTime())) {
-          dateObj = new Date(0); // Epoch fallback
+          dateObj = new Date(0);
         }
 
         if (cutoff && dateObj < cutoff) continue;
 
-        validRows.push([
-          dateObj,
-          typeof row[1] === 'number' ? row[1] : 0,
-          typeof row[2] === 'number' ? row[2] : 0,
-          typeof row[3] === 'number' ? row[3] : 0,
-          typeof row[4] === 'number' ? row[4] : 0
-        ]);
+        const totalOpen = typeof row[1] === 'number' ? Math.max(0, row[1]) : 0;
+        const completed = typeof row[2] === 'number' ? Math.max(0, row[2]) : 0;
+        const overdue = typeof row[3] === 'number' ? Math.max(0, row[3]) : 0;
+        const severity = typeof row[4] === 'number' ? Math.max(0, row[4]) : 0;
+
+        // Eliminate double-counting: On-Time = Total Open - Overdue
+        const onTimeOpen = Math.max(0, totalOpen - overdue);
+
+        validRows.push([dateObj, onTimeOpen, overdue, completed, severity]);
       }
 
       dataTable.addRows(validRows);
