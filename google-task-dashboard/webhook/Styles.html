@@ -334,6 +334,19 @@
     display: none;
   }
 
+  .summary-arrow {
+    transition: transform 0.2s ease;
+    display: inline-block;
+  }
+
+  details[open] .summary-arrow {
+    transform: rotate(0deg);
+  }
+
+  details:not([open]) .summary-arrow {
+    transform: rotate(-90deg);
+  }
+
   .danger-zone-content {
     margin-top: 14px;
     padding-top: 14px;
@@ -529,6 +542,10 @@
 
     h1 {
       font-size: 22px;
+    }
+
+    .cards {
+      display: none;
     }
 
     .controls-toolbar {
