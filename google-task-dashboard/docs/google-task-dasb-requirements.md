@@ -194,3 +194,17 @@ sequenceDiagram
     clearing done tasks across all lists. Google Tasks provides unique immutable
     `task.id`s, but individual IDs do not need to be stored in the sheet for
     aggregate trend metrics.
+
+## Next steps and features
+
+* implement smoothing in the graphs: if a lot of data exist in a specific 
+  period, don't plot them all
+* fix formatting of the buttons "📊 View Sheet 🔄 Reload Data ⚡ Sync now" 
+  since on mobile they get a different height all
+* on mobile: the cards that give the current numbers are too big, they 
+  should be somehow not shown then
+* danger zone: dropdown icon needs to change shape when folded, right now it 
+  stays "▼" also when folded (should only be this when unfolded)
+* I want to make the throughput configurable
+* confirm that the overdue age is calculated properly for fraction of days
+* in the graph views: we need a period that is shorter than 7 days, e.g. 3 days.
