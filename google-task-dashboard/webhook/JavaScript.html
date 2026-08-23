@@ -449,6 +449,46 @@
     }
 
     /**
+     * Deletes tasks completed more than 8 weeks ago from Google Tasks across all lists.
+     */
+    function handleDeleteOldCompletedTasks() {
+      const confirmed = confirm(
+        '⚠️ DELETE OLD COMPLETED TASKS (>8 WEEKS)\n\n' +
+        'This will permanently delete tasks that were completed more than 8 weeks ago across all your Google Task lists.\n\n' +
+        'Recent completed tasks (<8 weeks) will be kept intact.\n\n' +
+        'Proceed?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Deleting tasks completed > 8 weeks ago across all lists...', 'info');
+
+      google.script.run
+        .withSuccessHandler((result) => {
+          setButtonsDisabled(false);
+          if (!result || !result.success) {
+            const errMsg = (result && result.error) || 'Unknown error';
+            showStatus('Delete failed: ' + errMsg, 'error');
+            showNotification(`Delete failed\n${errMsg}`, '❌', 'error', 5000);
+            return;
+          }
+
+          showStatus(`Deleted ${result.tasksDeleted} old completed tasks. Refreshing dashboard...`, 'success');
+          showNotification(`Old Completed Tasks Deleted\n${result.tasksDeleted} tasks removed (>8w)`, '🗑️', 'success', 4000);
+          if (result.data) {
+            onDataLoaded(result.data);
+          } else {
+            fetchData();
+          }
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .deleteOldCompletedTasks(8);
+    }
+
+    /**
      * Triggers Sync & Clear Completed Tasks RPC with confirmation.
      */
     function handleSyncAndClear() {
@@ -570,10 +610,12 @@
     function setButtonsDisabled(disabled) {
       const btnSync = document.getElementById('btnSyncNow');
       const btnReload = document.getElementById('btnReloadData');
+      const btnDeleteOld = document.getElementById('btnDeleteOldCompleted');
       const btnClear = document.getElementById('btnSyncClear');
       const btnPrune = document.getElementById('btnPruneOldData');
       if (btnSync) btnSync.disabled = disabled;
       if (btnReload) btnReload.disabled = disabled;
+      if (btnDeleteOld) btnDeleteOld.disabled = disabled;
       if (btnClear) btnClear.disabled = disabled;
       if (btnPrune) btnPrune.disabled = disabled;
     }
@@ -598,6 +640,7 @@
       updateChartVisibility: updateChartVisibility,
       handleReloadData: handleReloadData,
       handleSyncNow: handleSyncNow,
+      handleDeleteOldCompletedTasks: handleDeleteOldCompletedTasks,
       handleSyncAndClear: handleSyncAndClear,
       handlePruneOldData: handlePruneOldData,
       handleTriggerToggle: handleTriggerToggle

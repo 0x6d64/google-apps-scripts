@@ -236,7 +236,7 @@ function syncNow() {
 }
 
 /**
- * Concurrency-safe Sync and Clear completed tasks across all lists.
+ * Concurrency-safe Sync and Clear ALL completed tasks across all lists.
  * @return {Object} Refreshed dashboard data.
  */
 function syncAndClearTasks() {
@@ -258,6 +258,106 @@ function syncAndClearTasks() {
     }
 
     return getDashboardData();
+  } finally {
+    releaseSyncLock();
+  }
+}
+
+/**
+ * Concurrency-safe deletion of completed tasks older than a specific threshold (default: 8 weeks / 56 days).
+ * Preserves recent completed tasks (< 8 weeks) in Google Tasks so throughput metrics remain visible.
+ * @param {number} [cutoffWeeks=8]
+ * @return {Object} { success: boolean, tasksDeleted: number, durationMs: number, data: Object, error?: string }
+ */
+function deleteOldCompletedTasks(cutoffWeeks) {
+  const startTime = Date.now();
+  const weeks = (typeof cutoffWeeks === 'number' && cutoffWeeks > 0) ? cutoffWeeks : 8;
+  const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
+  const cutoffDate = new Date(startTime - cutoffMs);
+
+  acquireSyncLock();
+  try {
+    let totalDeleted = 0;
+    const taskListsResult = Tasks.Tasklists.list();
+    const taskLists = (taskListsResult && taskListsResult.items) ? taskListsResult.items : [];
+
+    for (let i = 0; i < taskLists.length; i++) {
+      const listId = taskLists[i].id;
+      let pageToken = null;
+
+      do {
+        let response;
+        try {
+          response = Tasks.Tasks.list(listId, {
+            showCompleted: true,
+            showHidden: true,
+            maxResults: PAGE_FETCH_LIMIT,
+            pageToken: pageToken
+          });
+        } catch (err) {
+          Logger.log('Error fetching tasks for deletion in list ' + listId + ': ' + err);
+          break;
+        }
+
+        if (!response || !response.items || !Array.isArray(response.items)) {
+          break;
+        }
+
+        const tasks = response.items;
+        for (let j = 0; j < tasks.length; j++) {
+          const task = tasks[j];
+          if (!task || task.status !== 'completed') continue;
+
+          // Check completion timestamp
+          let isOld = false;
+          if (task.completed) {
+            const completedDate = new Date(task.completed);
+            if (!isNaN(completedDate.getTime()) && completedDate < cutoffDate) {
+              isOld = true;
+            }
+          } else if (task.updated) {
+            // Fallback to updated timestamp if completed date is missing
+            const updatedDate = new Date(task.updated);
+            if (!isNaN(updatedDate.getTime()) && updatedDate < cutoffDate) {
+              isOld = true;
+            }
+          }
+
+          if (isOld) {
+            try {
+              Tasks.Tasks.remove(listId, task.id);
+              totalDeleted++;
+            } catch (delErr) {
+              Logger.log('Failed to delete task ' + task.id + ': ' + delErr);
+            }
+          }
+        }
+
+        pageToken = response.nextPageToken;
+      } while (pageToken);
+    }
+
+    // Append fresh metrics snapshot after cleanup
+    ingestTaskMetrics();
+    const dashboardData = getDashboardData();
+    const durationMs = Date.now() - startTime;
+
+    Logger.log('[DELETE_OLD] Deleted ' + totalDeleted + ' tasks older than ' + weeks + ' weeks in ' + durationMs + 'ms');
+
+    return {
+      success: true,
+      tasksDeleted: totalDeleted,
+      durationMs: durationMs,
+      data: dashboardData
+    };
+  } catch (err) {
+    Logger.log('[DELETE_OLD] Error: ' + err);
+    return {
+      success: false,
+      tasksDeleted: 0,
+      durationMs: Date.now() - startTime,
+      error: (err && (err.message || err.toString())) || 'Failed to delete old completed tasks'
+    };
   } finally {
     releaseSyncLock();
   }

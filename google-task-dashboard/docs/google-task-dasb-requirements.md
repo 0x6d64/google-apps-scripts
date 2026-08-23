@@ -54,6 +54,12 @@ rely on the Google auth for access.
 * Expose an on-demand sync endpoint / function callable from frontend (`syncNow()`)
 * Expose `getDashboardData()` to read existing rows directly from the Google Sheet without calling Tasks API
 * Expose a `syncAndClearTasks()` endpoint: persists aggregate snapshot first, then iterates all lists and clears completed tasks via Google Tasks API (`Tasks.Tasks.clear()`)
+* **Age-based Completed Task Cleanup (`deleteTasksCompletedOlderThan(cutoffWeeks = 8)`):**
+  * Selectively deletes tasks that were marked completed more than 8 weeks (56 days) ago across all task lists.
+  * Preserves recently completed tasks (< 8 weeks) in Google Tasks so that recent completion history and throughput velocity remain visible.
+  * Iterates each task list, queries completed tasks (`status == 'completed'`), inspects the `task.completed` timestamp against `now - 8 weeks`, and permanently removes eligible tasks via `Tasks.Tasks.remove(taskListId, taskId)`.
+  * Ingests a new metrics snapshot to persist updated counts after deletion.
+  * Returns execution statistics: `{ success: boolean, tasksDeleted: number, durationMs: number, error?: string }`.
 * **Manual Daily Pruning (`pruneDataOlderThan1Year()`):**
   * Allows manual downsampling of historical data older than 1 year (365 days) to 1 snapshot per calendar day (UTC)
   * Removes intermediate (e.g. 3-hour) data points in reverse row order while preserving recent data (< 1 year) intact
@@ -83,7 +89,8 @@ rely on the Google auth for access.
   * **Sync Now**: Queries the Google Tasks API immediately across all task lists, appends a new snapshot row to the Google Sheet, and refreshes the charts
   * **Danger Zone Section**:
     * **Auto-Sync Toggle**: Control for the automated 3-hour background sync trigger (enabled by default via Script Properties)
-    * **Purge Completed Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears completed tasks across all lists from Google Tasks
+    * **Delete Old Done Tasks (>8w)**: Selectively deletes tasks completed more than 8 weeks ago from Google Tasks, keeping recent completions intact
+    * **Purge Completed Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears *all* completed tasks across all lists from Google Tasks
     * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
 * Lightweight responsive styling for desktop and mobile
 
@@ -113,6 +120,38 @@ sequenceDiagram
     end
     AppsScript-->>Frontend: Return success & latest metrics
     Frontend-->>User: Display confirmation & refresh chart
+```
+
+### Delete Tasks Completed > 8 Weeks Ago Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Frontend as HTML Dashboard
+    participant AppsScript as Apps Script Backend
+    participant TasksAPI as Google Tasks API
+    participant Sheet as Google Sheet
+
+    User->>Frontend: Clicks "Delete Old Done Tasks (>8w)"
+    Frontend->>User: Display confirmation prompt
+    User->>Frontend: Confirms deletion
+    Frontend->>AppsScript: Trigger deleteOldCompletedTasks(8)
+    AppsScript->>AppsScript: Acquire sync lock
+    AppsScript->>AppsScript: Calculate cutoff (now - 56 days)
+    loop For each task list
+        AppsScript->>TasksAPI: Fetch completed tasks (showCompleted=true, showHidden=true)
+        loop For each completed task
+            opt task.completed < cutoff
+                AppsScript->>TasksAPI: Call Tasks.remove(listId, taskId)
+            end
+        end
+    end
+    AppsScript->>AppsScript: Call ingestTaskMetrics() to persist new snapshot
+    AppsScript->>Sheet: Append updated row
+    AppsScript->>AppsScript: Release sync lock
+    AppsScript-->>Frontend: Return { success, tasksDeleted, durationMs, data }
+    Frontend-->>User: Show notification bubble & refresh dashboard
 ```
 
 ### Manual Prune Old Data Sequence
