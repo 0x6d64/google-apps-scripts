@@ -52,6 +52,7 @@ rely on the Google auth for access.
 * Scheduled time-driven trigger for automated collection
 * Implement `doGet()` to serve the dashboard and supply sheet data
 * Expose an on-demand sync endpoint / function callable from frontend (`syncNow()`)
+* Expose `getDashboardData()` to read existing rows directly from the Google Sheet without calling Tasks API
 * Expose a `syncAndClearTasks()` endpoint: persists aggregate snapshot first, then iterates all lists and clears completed tasks via Google Tasks API (`Tasks.Tasks.clear()`)
 * **Manual Daily Pruning (`pruneDataOlderThan1Year()`):**
   * Allows manual downsampling of historical data older than 1 year (365 days) to 1 snapshot per calendar day (UTC)
@@ -77,11 +78,13 @@ rely on the Google auth for access.
 * **Interactive Chart Features:**
   * **Series / Element Toggling:** Interactive toggle buttons/checkboxes allowing the user to show/hide specific metric series (e.g., toggle "Open", "Completed", "Overdue", "Overdue Severity") dynamically (e.g., using `google.visualization.DataView.setColumns()`)
   * **Date Range Filtering:** Quick-select range filters (e.g., 7 Days, 14 Days, 30 Days, All Time) and custom date inputs to dynamically filter rows (e.g., via `DataView.setRows()` or Google Charts `ChartRangeFilter`) without backend roundtrips
-* **Action Controls & Housekeeping:**
-  * **Sync Now**: Triggers immediate data ingestion and refreshes chart client-side
+* **Action Controls & Housekeeping (with descriptive tooltips):**
+  * **View Sheet**: Direct link opening the backing Google Spreadsheet in Google Drive
+  * **Reload Data**: Re-reads historical snapshots from the Google Sheet without calling the Google Tasks API (retrieves background sync updates)
+  * **Sync Now**: Queries the Google Tasks API immediately across all task lists, appends a new snapshot row to the Google Sheet, and refreshes the charts
   * **Danger Zone Section**:
     * **Auto-Sync Toggle**: Control for the automated 3-hour background sync trigger (enabled by default via Script Properties)
-    * **Sync & Clear Done Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears completed tasks across all lists from Google Tasks
+    * **Purge Completed Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears completed tasks across all lists from Google Tasks
     * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
 * Lightweight responsive styling for desktop and mobile
 

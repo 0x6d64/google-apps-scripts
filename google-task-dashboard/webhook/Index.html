@@ -22,11 +22,14 @@
       </div>
 
       <div class="header-actions">
-        <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open Google Sheet">
+        <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
           <span class="btn-icon">📊</span> View Sheet
         </a>
-        <button id="btnSyncNow" class="btn btn-primary" onclick="DashboardApp.handleSyncNow()">
-          <span class="btn-icon">↻</span> Sync Now
+        <button id="btnReloadData" class="btn btn-secondary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
+          <span class="btn-icon">🔄</span> Reload Data
+        </button>
+        <button id="btnSyncNow" class="btn btn-primary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
+          <span class="btn-icon">⚡</span> Sync Now
         </button>
       </div>
     </header>
@@ -66,26 +69,26 @@
       <div class="control-group">
         <span class="control-label">Range:</span>
         <div class="pill-group" id="rangeFilterGroup">
-          <button class="pill" data-range="7" onclick="DashboardApp.setRangeFilter(7)">7D</button>
-          <button class="pill" data-range="14" onclick="DashboardApp.setRangeFilter(14)">14D</button>
-          <button class="pill active" data-range="30" onclick="DashboardApp.setRangeFilter(30)">30D</button>
-          <button class="pill" data-range="all" onclick="DashboardApp.setRangeFilter('all')">All</button>
+          <button class="pill" data-range="7" title="Filter charts to show snapshots from the past 7 days" onclick="DashboardApp.setRangeFilter(7)">7D</button>
+          <button class="pill" data-range="14" title="Filter charts to show snapshots from the past 14 days" onclick="DashboardApp.setRangeFilter(14)">14D</button>
+          <button class="pill active" data-range="30" title="Filter charts to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
+          <button class="pill" data-range="all" title="Show all historical snapshot entries" onclick="DashboardApp.setRangeFilter('all')">All</button>
         </div>
       </div>
 
       <div class="control-group">
         <span class="control-label">Series:</span>
         <div class="pill-group" id="seriesToggleGroup">
-          <label class="toggle-pill pill-open">
+          <label class="toggle-pill pill-open" title="Toggle visibility of incomplete Open Tasks count">
             <input type="checkbox" id="toggleOpen" checked onchange="DashboardApp.updateChartVisibility()"> Open
           </label>
-          <label class="toggle-pill pill-completed">
+          <label class="toggle-pill pill-completed" title="Toggle visibility of Completed Tasks count">
             <input type="checkbox" id="toggleCompleted" checked onchange="DashboardApp.updateChartVisibility()"> Completed
           </label>
-          <label class="toggle-pill pill-overdue">
+          <label class="toggle-pill pill-overdue" title="Toggle visibility of Overdue Tasks count">
             <input type="checkbox" id="toggleOverdue" checked onchange="DashboardApp.updateChartVisibility()"> Overdue
           </label>
-          <label class="toggle-pill pill-severity">
+          <label class="toggle-pill pill-severity" title="Toggle visibility of Overdue Severity score (√days cumulative debt)">
             <input type="checkbox" id="toggleSeverity" checked onchange="DashboardApp.updateChartVisibility()"> Severity (√days)
           </label>
         </div>
@@ -116,13 +119,13 @@
     <!-- Collapsible Danger Zone for Housekeeping -->
     <section class="panel danger-zone-panel">
       <details class="danger-zone-details" open>
-        <summary class="danger-zone-summary">
+        <summary class="danger-zone-summary" title="Click to expand or collapse dangerous maintenance options">
           <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
           <span class="summary-arrow">▼</span>
         </summary>
         <div class="danger-zone-content">
           <div class="danger-zone-setting">
-            <label class="trigger-toggle-label">
+            <label class="trigger-toggle-label" title="Enable or disable the 3-hour automated background data collection trigger in Apps Script.">
               <input type="checkbox" id="toggleAutoTrigger" checked onchange="DashboardApp.handleTriggerToggle(this.checked)">
               <strong>Automated Background Sync (every 3 hours)</strong>
             </label>
@@ -130,10 +133,10 @@
           </div>
 
           <div class="danger-zone-actions">
-            <button id="btnSyncClear" class="btn btn-danger" onclick="DashboardApp.handleSyncAndClear()">
+            <button id="btnSyncClear" class="btn btn-danger" title="Permanently clear and archive all completed tasks from Google Tasks after safely appending a final metrics snapshot to the Google Sheet." onclick="DashboardApp.handleSyncAndClear()">
               <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
             </button>
-            <button id="btnPruneOldData" class="btn btn-secondary" onclick="DashboardApp.handlePruneOldData()">
+            <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed." onclick="DashboardApp.handlePruneOldData()">
               <span class="btn-icon">🧹</span> Prune Old Data (>1 year)
             </button>
           </div>

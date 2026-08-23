@@ -72,7 +72,6 @@
 
       const triggerBox = document.getElementById('toggleAutoTrigger');
       if (triggerBox) {
-        // Active by default or per backend state
         triggerBox.checked = (typeof data.triggerActive === 'boolean') ? data.triggerActive : true;
       }
 
@@ -217,10 +216,9 @@
         return;
       }
 
-      // Restore container if previously showing empty spinner
       if (chartContainer.querySelector('.loading-spinner')) {
         chartContainer.innerHTML = '';
-        mainChartInstance = null; // Re-instantiate on clean element
+        mainChartInstance = null;
       }
 
       dataView.setColumns(visibleCols);
@@ -283,10 +281,9 @@
         return;
       }
 
-      // Restore container if previously showing empty spinner
       if (chartContainer.querySelector('.loading-spinner')) {
         chartContainer.innerHTML = '';
-        volumeChartInstance = null; // Re-instantiate on clean element
+        volumeChartInstance = null;
       }
 
       dataView.setColumns(volCols);
@@ -372,6 +369,26 @@
      */
     function updateChartVisibility() {
       renderCharts();
+    }
+
+    /**
+     * Re-reads existing snapshot rows directly from the Google Sheet without calling Tasks API.
+     */
+    function handleReloadData() {
+      setButtonsDisabled(true);
+      showStatus('Reloading data from Google Sheet...', 'info');
+
+      google.script.run
+        .withSuccessHandler((data) => {
+          setButtonsDisabled(false);
+          showStatus('Data reloaded successfully!', 'success');
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .getDashboardData();
     }
 
     /**
@@ -502,9 +519,11 @@
 
     function setButtonsDisabled(disabled) {
       const btnSync = document.getElementById('btnSyncNow');
+      const btnReload = document.getElementById('btnReloadData');
       const btnClear = document.getElementById('btnSyncClear');
       const btnPrune = document.getElementById('btnPruneOldData');
       if (btnSync) btnSync.disabled = disabled;
+      if (btnReload) btnReload.disabled = disabled;
       if (btnClear) btnClear.disabled = disabled;
       if (btnPrune) btnPrune.disabled = disabled;
     }
@@ -527,6 +546,7 @@
       init: init,
       setRangeFilter: setRangeFilter,
       updateChartVisibility: updateChartVisibility,
+      handleReloadData: handleReloadData,
       handleSyncNow: handleSyncNow,
       handleSyncAndClear: handleSyncAndClear,
       handlePruneOldData: handlePruneOldData,
