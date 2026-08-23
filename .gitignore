@@ -198,8 +198,8 @@ tempCodeRunnerFile.py
 # ============================================================
 
 # Google clasp
-.clasprc.json
-webhook/.clasp.json
+**/.clasprc.json
+**/.clasp.json
 
 # ============================================================
 # OS Files
