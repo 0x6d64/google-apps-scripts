@@ -1,0 +1,460 @@
+<script>
+  /**
+   * Encapsulated Dashboard Application Module
+   */
+  const DashboardApp = (function () {
+    let rawData = null;
+    let activeRangeDays = 30;
+    let mainChartInstance = null;
+    let volumeChartInstance = null;
+    let resizeTimer = null;
+
+    /**
+     * Color definitions for consistent series visualization.
+     */
+    const SERIES_COLORS = {
+      open: '#1a73e8',       // Blue
+      completed: '#188038',  // Green
+      overdue: '#d93025',    // Red
+      severity: '#a142f4'    // Purple
+    };
+
+    /**
+     * Initializes Google Charts and fetches dashboard metrics.
+     */
+    function init() {
+      google.charts.load('current', { packages: ['corechart'] });
+      google.charts.setOnLoadCallback(fetchData);
+      setupResizeHandler();
+    }
+
+    /**
+     * Debounced window resize event listener.
+     */
+    function setupResizeHandler() {
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (rawData) renderCharts();
+        }, 300);
+      });
+    }
+
+    /**
+     * Fetches historical time-series data from backend RPC.
+     */
+    function fetchData() {
+      showStatus('Loading data from Google Sheet...', 'info');
+      google.script.run
+        .withSuccessHandler(onDataLoaded)
+        .withFailureHandler(onDataError)
+        .getDashboardData();
+    }
+
+    /**
+     * Handles successful data reception from Apps Script.
+     * @param {Object} data - { headers, rows, sheetUrl, triggerActive }
+     */
+    function onDataLoaded(data) {
+      if (!data || !Array.isArray(data.rows)) {
+        showStatus('Received invalid data format from server.', 'error');
+        return;
+      }
+
+      // Store a deep clone to protect against accidental mutation
+      rawData = JSON.parse(JSON.stringify(data));
+      hideStatus();
+
+      if (data.sheetUrl) {
+        const link = document.getElementById('sheetLink');
+        if (link) link.href = data.sheetUrl;
+      }
+
+      if (typeof data.triggerActive === 'boolean') {
+        const triggerBox = document.getElementById('toggleAutoTrigger');
+        if (triggerBox) triggerBox.checked = data.triggerActive;
+      }
+
+      updateKPIsAndStaleness();
+      renderCharts();
+    }
+
+    /**
+     * Handles data load or sync errors with descriptive messages.
+     * @param {Error|Object|string} err
+     */
+    function onDataError(err) {
+      const msg = (err && (err.message || err.toString())) || 'Unknown server error';
+      showStatus('Operation failed: ' + msg, 'error');
+    }
+
+    /**
+     * Updates top KPI cards, 7-day velocity metric, and staleness indicator.
+     */
+    function updateKPIsAndStaleness() {
+      if (!rawData || !rawData.rows || rawData.rows.length === 0) return;
+
+      const rows = rawData.rows;
+      const latest = rows[rows.length - 1];
+
+      setElemText('kpiOpen', latest[1]);
+      setElemText('kpiCompleted', latest[2]);
+      setElemText('kpiOverdue', latest[3]);
+      setElemText('kpiSeverity', latest[4]);
+
+      // Staleness / Last Updated Indicator (Local Timezone labeled)
+      const lastDate = new Date(latest[0]);
+      if (!isNaN(lastDate.getTime())) {
+        const diffMins = Math.floor((Date.now() - lastDate.getTime()) / 60000);
+        const timeAgoStr = diffMins < 1 ? 'Just now' : (diffMins < 60 ? diffMins + ' min ago' : Math.floor(diffMins / 60) + ' hr ago');
+        const tzAbbr = getLocalTimezoneLabel();
+        setElemText('lastUpdatedSubtext', 'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+      }
+
+      // Calculate 7-day velocity (completed tasks change over recent week)
+      calculateVelocity(rows);
+    }
+
+    /**
+     * Computes completion throughput velocity over the past 7 days.
+     * @param {Array<Array<any>>} rows
+     */
+    function calculateVelocity(rows) {
+      const now = Date.now();
+      const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+      const recentRows = rows.filter(r => new Date(r[0]).getTime() >= sevenDaysAgo);
+
+      if (recentRows.length >= 2) {
+        const oldestCompleted = recentRows[0][2];
+        const newestCompleted = recentRows[recentRows.length - 1][2];
+        const diff = Math.max(0, newestCompleted - oldestCompleted);
+        const ratePerDay = (diff / 7).toFixed(1);
+        setElemText('kpiVelocitySubtext', '7d Throughput: ~' + ratePerDay + '/day');
+      } else {
+        setElemText('kpiVelocitySubtext', '7d Throughput: Calculating...');
+      }
+    }
+
+    /**
+     * Re-renders both the primary and secondary charts.
+     */
+    function renderCharts() {
+      if (!rawData || !rawData.rows || rawData.rows.length === 0) return;
+      drawMainDualAxisChart();
+      drawVolumeChart();
+    }
+
+    /**
+     * Helper to safely read checkbox state with DOM null guard.
+     */
+    function isChecked(elemId) {
+      const el = document.getElementById(elemId);
+      return el ? Boolean(el.checked) : false;
+    }
+
+    /**
+     * Safe DOM text updater with null guard.
+     */
+    function setElemText(elemId, text) {
+      const el = document.getElementById(elemId);
+      if (el) el.innerText = String(text);
+    }
+
+    /**
+     * Retrieves local timezone label.
+     */
+    function getLocalTimezoneLabel() {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+      } catch (e) {
+        return 'Local';
+      }
+    }
+
+    /**
+     * Builds and draws the primary Dual-Axis Combo Time Series Chart.
+     */
+    function drawMainDualAxisChart() {
+      const chartContainer = document.getElementById('mainChart');
+      if (!chartContainer) return;
+
+      const dataTable = buildFilteredDataTable();
+      if (!dataTable || dataTable.getNumberOfRows() === 0) {
+        chartContainer.innerHTML = '<div class="loading-spinner">No snapshots available for the selected date range.</div>';
+        return;
+      }
+
+      const dataView = new google.visualization.DataView(dataTable);
+      const visibleCols = [0]; // Time column
+      const seriesConfig = {};
+      let activeSeriesIdx = 0;
+
+      const showOpen = isChecked('toggleOpen');
+      const showCompleted = isChecked('toggleCompleted');
+      const showOverdue = isChecked('toggleOverdue');
+      const showSeverity = isChecked('toggleSeverity');
+
+      if (showOpen) {
+        visibleCols.push(1);
+        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 0, color: SERIES_COLORS.open, type: 'line', lineWidth: 3 };
+      }
+      if (showCompleted) {
+        visibleCols.push(2);
+        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 0, color: SERIES_COLORS.completed, type: 'line', lineWidth: 2 };
+      }
+      if (showOverdue) {
+        visibleCols.push(3);
+        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 0, color: SERIES_COLORS.overdue, type: 'line', lineWidth: 2 };
+      }
+      if (showSeverity) {
+        visibleCols.push(4);
+        seriesConfig[activeSeriesIdx++] = { targetAxisIndex: 1, color: SERIES_COLORS.severity, type: 'area', areaOpacity: 0.15, lineWidth: 2 };
+      }
+
+      if (visibleCols.length === 1) {
+        chartContainer.innerHTML = '<div class="loading-spinner">Select at least one metric series above to render chart.</div>';
+        return;
+      }
+
+      dataView.setColumns(visibleCols);
+
+      const tzLabel = getLocalTimezoneLabel();
+      const options = {
+        seriesType: 'line',
+        series: seriesConfig,
+        vAxes: {
+          0: { title: 'Task Volume', minValue: 0, gridlines: { color: '#f1f3f4' } },
+          1: { title: 'Overdue Severity (√days)', minValue: 0, gridlines: { color: 'transparent' } }
+        },
+        hAxis: {
+          title: 'Time (' + tzLabel + ')',
+          gridlines: { color: '#f1f3f4' }
+        },
+        legend: { position: 'top', alignment: 'end' },
+        chartArea: { left: 60, right: 70, top: 30, bottom: 60, width: '85%', height: '75%' },
+        pointSize: 4,
+        interpolateNulls: true,
+        backgroundColor: 'transparent'
+      };
+
+      if (!mainChartInstance) {
+        mainChartInstance = new google.visualization.ComboChart(chartContainer);
+      }
+      mainChartInstance.draw(dataView, options);
+    }
+
+    /**
+     * Builds and draws the secondary volume column chart.
+     * Guarantees exact 1-to-1 color and column alignment.
+     */
+    function drawVolumeChart() {
+      const chartContainer = document.getElementById('volumeChart');
+      if (!chartContainer) return;
+
+      const dataTable = buildFilteredDataTable();
+      if (!dataTable || dataTable.getNumberOfRows() === 0) return;
+
+      const dataView = new google.visualization.DataView(dataTable);
+      const volCols = [0];
+      const colColors = [];
+
+      if (isChecked('toggleOpen')) {
+        volCols.push(1);
+        colColors.push(SERIES_COLORS.open);
+      }
+      if (isChecked('toggleCompleted')) {
+        volCols.push(2);
+        colColors.push(SERIES_COLORS.completed);
+      }
+      if (isChecked('toggleOverdue')) {
+        volCols.push(3);
+        colColors.push(SERIES_COLORS.overdue);
+      }
+
+      if (volCols.length === 1) {
+        chartContainer.innerHTML = '<div class="loading-spinner">No task count series active.</div>';
+        return;
+      }
+
+      dataView.setColumns(volCols);
+
+      const tzLabel = getLocalTimezoneLabel();
+      const options = {
+        isStacked: false,
+        colors: colColors,
+        vAxis: { title: 'Tasks', minValue: 0, gridlines: { color: '#f1f3f4' } },
+        hAxis: { title: 'Time (' + tzLabel + ')', gridlines: { color: '#f1f3f4' } },
+        legend: { position: 'top', alignment: 'end' },
+        chartArea: { left: 60, right: 30, top: 30, bottom: 60, width: '90%', height: '75%' },
+        backgroundColor: 'transparent'
+      };
+
+      if (!volumeChartInstance) {
+        volumeChartInstance = new google.visualization.ColumnChart(chartContainer);
+      }
+      volumeChartInstance.draw(dataView, options);
+    }
+
+    /**
+     * Constructs a safe, validated Google DataTable filtered by the active time window.
+     * @return {google.visualization.DataTable|null}
+     */
+    function buildFilteredDataTable() {
+      if (!rawData || !rawData.rows) return null;
+
+      const dataTable = new google.visualization.DataTable();
+      dataTable.addColumn('datetime', 'Time');
+      dataTable.addColumn('number', 'Open Tasks');
+      dataTable.addColumn('number', 'Completed Tasks');
+      dataTable.addColumn('number', 'Overdue Tasks');
+      dataTable.addColumn('number', 'Overdue Severity');
+
+      const now = Date.now();
+      const cutoff = activeRangeDays === 'all'
+        ? null
+        : new Date(now - (Number(activeRangeDays) || 30) * 24 * 60 * 60 * 1000);
+
+      const validRows = [];
+      for (let i = 0; i < rawData.rows.length; i++) {
+        const row = rawData.rows[i];
+        if (!row || !row[0]) continue;
+
+        let dateObj = new Date(row[0]);
+        if (isNaN(dateObj.getTime())) {
+          dateObj = new Date(0); // Epoch fallback
+        }
+
+        if (cutoff && dateObj < cutoff) continue;
+
+        validRows.push([
+          dateObj,
+          typeof row[1] === 'number' ? row[1] : 0,
+          typeof row[2] === 'number' ? row[2] : 0,
+          typeof row[3] === 'number' ? row[3] : 0,
+          typeof row[4] === 'number' ? row[4] : 0
+        ]);
+      }
+
+      dataTable.addRows(validRows);
+      return dataTable;
+    }
+
+    /**
+     * Sanitizes and sets the active date range filter.
+     * @param {number|string} range
+     */
+    function setRangeFilter(range) {
+      activeRangeDays = (range === 'all') ? 'all' : (Number(range) || 30);
+
+      const pills = document.querySelectorAll('#rangeFilterGroup .pill');
+      pills.forEach(p => {
+        p.classList.toggle('active', p.getAttribute('data-range') === String(range));
+      });
+
+      renderCharts();
+    }
+
+    /**
+     * Handles series checkbox toggles.
+     */
+    function updateChartVisibility() {
+      renderCharts();
+    }
+
+    /**
+     * Triggers Manual Sync Now RPC with UI lock.
+     */
+    function handleSyncNow() {
+      setButtonsDisabled(true);
+      showStatus('Syncing tasks across all lists from Google Tasks API...', 'info');
+
+      google.script.run
+        .withSuccessHandler((data) => {
+          setButtonsDisabled(false);
+          showStatus('Sync completed successfully!', 'success');
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .syncNow();
+    }
+
+    /**
+     * Triggers Sync & Clear Completed Tasks RPC with confirmation.
+     */
+    function handleSyncAndClear() {
+      const confirmed = confirm(
+        '⚠️ PERMANENT ACTION:\n\n' +
+        'This will persist the latest metrics to the Google Sheet and CLEAR/ARCHIVE all completed tasks across all your Google Task lists.\n\n' +
+        'Are you sure you want to proceed?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Persisting metrics and purging completed tasks across all lists...', 'info');
+
+      google.script.run
+        .withSuccessHandler((data) => {
+          setButtonsDisabled(false);
+          showStatus('Completed tasks purged and snapshot persisted successfully!', 'success');
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .syncAndClearTasks();
+    }
+
+    /**
+     * Toggles 3-hour automated background sync trigger.
+     * @param {boolean} enable
+     */
+    function handleTriggerToggle(enable) {
+      showStatus((enable ? 'Enabling' : 'Disabling') + ' automated 3h sync trigger...', 'info');
+      google.script.run
+        .withSuccessHandler((isActive) => {
+          showStatus('Automated background trigger ' + (isActive ? 'enabled' : 'disabled') + '.', 'success');
+          const triggerBox = document.getElementById('toggleAutoTrigger');
+          if (triggerBox) triggerBox.checked = isActive;
+        })
+        .withFailureHandler(onDataError)
+        .setTriggerEnabled(enable);
+    }
+
+    function setButtonsDisabled(disabled) {
+      const btnSync = document.getElementById('btnSyncNow');
+      const btnClear = document.getElementById('btnSyncClear');
+      if (btnSync) btnSync.disabled = disabled;
+      if (btnClear) btnClear.disabled = disabled;
+    }
+
+    function showStatus(message, type) {
+      const banner = document.getElementById('statusBanner');
+      if (!banner) return;
+      banner.className = 'status-banner ' + type;
+      banner.innerText = message;
+      banner.style.display = 'block';
+    }
+
+    function hideStatus() {
+      const banner = document.getElementById('statusBanner');
+      if (banner) banner.style.display = 'none';
+    }
+
+    // Public API
+    return {
+      init: init,
+      setRangeFilter: setRangeFilter,
+      updateChartVisibility: updateChartVisibility,
+      handleSyncNow: handleSyncNow,
+      handleSyncAndClear: handleSyncAndClear,
+      handleTriggerToggle: handleTriggerToggle
+    };
+  })();
+
+  // Initialize on load
+  DashboardApp.init();
+</script>
