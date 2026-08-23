@@ -190,10 +190,7 @@
         const oldestCompleted = recentRows[0][2];
         const newestCompleted = recentRows[recentRows.length - 1][2];
         const diff = Math.max(0, newestCompleted - oldestCompleted);
-        const elapsedMs = new Date(recentRows[recentRows.length - 1][0]).getTime()
-          - new Date(recentRows[0][0]).getTime();
-        const elapsedDays = Math.max(elapsedMs / (1000 * 60 * 60 * 24), 1 / 24); // min 1h
-        const ratePerDay = (diff / elapsedDays).toFixed(1);
+        const ratePerDay = (diff / 7).toFixed(1);
         setElemText('kpiVelocitySubtext', '7d Throughput: ~' + ratePerDay + '/day');
       } else {
         setElemText('kpiVelocitySubtext', '7d Throughput: Calculating...');
