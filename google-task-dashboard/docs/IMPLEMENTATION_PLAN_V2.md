@@ -1,5 +1,12 @@
 # Implementation Plan v2: Updated Status (Items 1, 2, 4, 10 Complete)
 
+## How to adapt and extend
+- never use the concept of sprint, instead use "iteration" as a concept
+- do not use time estimates, instead estimate the effort as S, M, L, XL 
+  (tshirt sizes)
+- do not use the terms "new" if items get implemented or added, instead just 
+  add them or mark them as done
+
 ## Overview
 
 This document tracks completion of planned features. Items 1, 2, 4, 10 have been implemented.
@@ -8,7 +15,7 @@ Current implementation status:
 - ✅ Items 1-5 (earlier sprint): Button layout, collapse icon, mobile cards hide, fractional days, 3-window velocity
 - ✅ Item 6: 3-day range pill
 - ✅ Item 7: Graph smoothing (skeleton)
-- ✅ **NEW — Items 1, 2, 4, 10** (this sprint)
+- ✅ Items 1, 2, 4, 10
 
 ---
 
