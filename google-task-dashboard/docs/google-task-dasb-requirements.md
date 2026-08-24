@@ -216,3 +216,10 @@ sequenceDiagram
 * use fractional days for overdue age calculation instead of flooring to whole
   days
 * in the graph views: add a period that is shorter than 7 days, e.g. 3 days
+* visual fix: folding button shows a blinking cursor next to symbol
+* danger zone should be start folded
+* dashboard should have a feature where it loads data from sheet automatically every 30 minutes. this can be toggled with a checkbox on top of page. by default it is off.
+* dashboard shows text like "Last snapshot: 24/08/2026, 11:11:07 Europe/Bucharest (13 min ago)". The "xx ago" text should automatically update (maybe every 10 seconds or so, depending on best practices). this should not trigger a round trip to the google sheet, but instead just keep the info about the relative age updated. if a fetch from the sheet it triggered (automatically by timer, or by a button press), then the relative age also needs to be correct immediately or with a minimal delay.
+* on longer timeframes: would be nice to have a thin "rolling average" line. this feature needs more refinement and consideration to not clutter the graph.
+* add a button to open the task list (e.g. `https://calendar.google.com/calendar/u/0/r/tasks`)
+* open tasks: do not consider tasks that are due longer than 6 months into the future. add this info also to the dashboard (can be a small note next to the open card)
