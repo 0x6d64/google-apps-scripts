@@ -232,4 +232,5 @@ sequenceDiagram
 - modify UI: the buttons need to have a better text: the better descriptions are "fetch data from sheets" and "ingest from tasks". the button to open tasks shall be called "launch google task" or something similar, since "open" can be confused with open tasks. the symbol also needs to be something that indicates an external link like 🔗
 - the task cards shall be not as high to save space
 - in the danger zone: the buttons need to be sorted so that the actions are sorted by gravity/impact
+- maybe this is already implemented, the dashboard shall automatically fetch from google sheets every X minutes. this shall be something that can be toggled on the UI. TODO: find a good value for X, we don't want to create too many requests per day (assume that the dashboard can be open in several browsers at the same time). consider disabling the feature when the tab is not in focus.
 
