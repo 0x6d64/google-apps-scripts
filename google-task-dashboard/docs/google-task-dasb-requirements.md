@@ -213,7 +213,7 @@ sequenceDiagram
 9. ✅ **Relative age auto-update** — "xx ago" text increments every 10 seconds without fetching data; updates immediately on data fetch
 10. ✅ **Open Tasks button** — Direct link to Google Calendar Tasks view in header toolbar
 
-### Planned
+### Planned in implementation plan
 
 - **Auto-refresh toggle (30 min interval)** — Optional background polling of sheet data every 30 minutes; toggleable on dashboard (default: off)
   - Estimated effort: 15 min
@@ -228,9 +228,14 @@ sequenceDiagram
   - Estimated effort: 30+ min
   - Status: On hold pending UX refinement (window size, series selection, toggle placement)
   - Files: JavaScript.html
+
+### Supplied by user
+
 - extend the UI: right now the HTML page shows to ages: how long ago was the snapshot taken. but we need to also need to add info when we last fetched from google sheets. both info texts shall be updated in the same loop to keep the relative ages accurate.
 - modify UI: the buttons need to have a better text: the better descriptions are "fetch data from sheets" and "ingest from tasks". the button to open tasks shall be called "launch google task" or something similar, since "open" can be confused with open tasks. the symbol also needs to be something that indicates an external link like 🔗
 - the task cards shall be not as high to save space
 - in the danger zone: the buttons need to be sorted so that the actions are sorted by gravity/impact
 - maybe this is already implemented, the dashboard shall automatically fetch from google sheets every X minutes. this shall be something that can be toggled on the UI. TODO: find a good value for X, we don't want to create too many requests per day (assume that the dashboard can be open in several browsers at the same time). consider disabling the feature when the tab is not in focus.
-
+- danger zone in the UI: the arrow needs to rotate only 90 degrees: pointing 
+  to the sid when collapsed, and pointing down when expanded.
+- 
