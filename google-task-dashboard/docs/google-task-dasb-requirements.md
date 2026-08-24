@@ -216,26 +216,24 @@ sequenceDiagram
 ### Planned in implementation plan
 
 - **Auto-refresh toggle (30 min interval)** — Optional background polling of sheet data every 30 minutes; toggleable on dashboard (default: off)
-  - Estimated effort: 15 min
+  - Effort: M
   - Files: JavaScript.html
 - **Graph downsampling / smoothing** — Automatic point reduction for large date ranges (14d+) to improve chart rendering speed and reduce visual clutter while preserving trend visibility
-  - Estimated effort: 25 min
+  - Effort: M
   - Files: JavaScript.html
 - **6-month future task filter** — Exclude tasks due >6 months in future from "Open Tasks" count to avoid artificial inflation from placeholder far-future tasks; add UI note
-  - Estimated effort: 15 min
+  - Effort: S
   - Files: Code.js, JavaScript.html
 - **Rolling average line (advanced)** — Optional thin overlay line showing N-point moving average for smoother trend visualization on longer timeframes
-  - Estimated effort: 30+ min
+  - Effort: L
   - Status: On hold pending UX refinement (window size, series selection, toggle placement)
   - Files: JavaScript.html
 
 ### Supplied by user
 
-- extend the UI: right now the HTML page shows to ages: how long ago was the snapshot taken. but we need to also need to add info when we last fetched from google sheets. both info texts shall be updated in the same loop to keep the relative ages accurate.
-- modify UI: the buttons need to have a better text: the better descriptions are "fetch data from sheets" and "ingest from tasks". the button to open tasks shall be called "launch google task" or something similar, since "open" can be confused with open tasks. the symbol also needs to be something that indicates an external link like 🔗
-- the task cards shall be not as high to save space
-- in the danger zone: the buttons need to be sorted so that the actions are sorted by gravity/impact
-- maybe this is already implemented, the dashboard shall automatically fetch from google sheets every X minutes. this shall be something that can be toggled on the UI. TODO: find a good value for X, we don't want to create too many requests per day (assume that the dashboard can be open in several browsers at the same time). consider disabling the feature when the tab is not in focus.
-- danger zone in the UI: the arrow needs to rotate only 90 degrees: pointing 
-  to the sid when collapsed, and pointing down when expanded.
-- 
+1. Extend UI: Show two separate ages — snapshot timestamp and last sheet fetch timestamp. Both update in same loop to keep relative ages accurate.
+2. Modify button text: "Fetch Data From Sheets" (was "Reload Data"), "Ingest From Tasks" (was "Sync Now"), "Launch Google Tasks" (was "Open Tasks"). Use 🔗 icon for external link.
+3. Reduce card height — Save space on KPI cards.
+4. Sort danger zone buttons by impact/gravity order.
+5. Auto-fetch from sheets every X minutes (toggleable, disabled when tab not in focus). Determine safe interval to limit daily API request volume.
+6. Arrow rotation: 90° only (→ when collapsed, ↓ when expanded), not 180°.
