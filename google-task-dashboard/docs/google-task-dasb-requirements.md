@@ -229,18 +229,8 @@ sequenceDiagram
 
 ## Next steps and features
 
-### Completed (✅ All implemented)
-
-1. ✅ **Button responsive layout on mobile** — Header action buttons stack/flex evenly on screens < 768px
-2. ✅ **Danger zone collapse icon rotation** — Arrow rotates 180° on expand/collapse with smooth 0.2s transition
-3. ✅ **Hide KPI cards on mobile** — Cards hidden below 768px viewport width
-4. ✅ **Fractional days in overdue severity** — Removed `Math.floor()` to preserve partial-day decay (e.g., 2.3 days → √2.3 ≈ 1.70)
-5. ✅ **3-window velocity display** — Show completion throughput for 24h, 3d, 7d windows using actual elapsed time between snapshots
-6. ✅ **3-day range filter pill** — Added "3D" quick-select alongside existing 7D, 14D, 30D, All
-7. ✅ **Folding button cursor fix** — Added `user-select: none` to danger zone summary to prevent text selection cursor blink
-8. ✅ **Danger zone starts folded** — Removed `open` attribute; collapses by default on page load
-9. ✅ **Relative age auto-update** — "xx ago" text increments every 10 seconds without fetching data; updates immediately on data fetch
-10. ✅ **Open Tasks button** — Direct link to Google Calendar Tasks view in header toolbar
+The following features remain planned and are not yet requirements for the
+current implementation:
 
 ### Planned in implementation plan
 
@@ -257,12 +247,21 @@ sequenceDiagram
   - Effort: L
   - Status: On hold pending UX refinement (window size, series selection, toggle placement)
   - Files: JavaScript.html
-
-### Supplied by user
-
-1. Extend UI: Show two separate ages — snapshot timestamp and last sheet fetch timestamp. Both update in same loop to keep relative ages accurate.
-2. Modify button text: "Fetch Data From Sheets" (was "Reload Data"), "Ingest From Tasks" (was "Sync Now"), "Launch Google Tasks" (was "Open Tasks"). Use 🔗 icon for external link.
-3. Reduce card height — Save space on KPI cards.
-4. Sort danger zone buttons by impact/gravity order.
-5. Auto-fetch from sheets every X minutes (toggleable, disabled when tab not in focus). Determine safe interval to limit daily API request volume.
-6. Arrow rotation: 90° only (→ when collapsed, ↓ when expanded), not 180°.
+- **Separate snapshot and sheet-fetch ages** — The dashboard shall display two independent timestamps/relative ages: the age of the latest task snapshot and the age of the most recent fetch of historical data from the Google Sheet. Both relative-age displays shall be updated by the same client-side timer loop and immediately after data is fetched.
+  - Effort: M
+  - Files: JavaScript.html, Index.html
+- **Action button terminology and external-link icon** — Rename the relevant dashboard actions to `Fetch Data From Sheets`, `Ingest From Tasks`, and `Launch Google Tasks`. The external Google Tasks action shall use the 🔗 icon.
+  - Effort: S
+  - Files: Index.html, JavaScript.html
+- **Reduced KPI card height** — Reduce the vertical space occupied by the KPI cards while preserving their labels, values, and supporting text.
+  - Effort: S
+  - Files: Styles.html
+- **Danger Zone action ordering** — Order the Danger Zone actions from highest impact/gravity to lowest impact/gravity.
+  - Effort: S
+  - Files: Index.html
+- **Configurable sheet-data auto-fetch** — Provide an optional dashboard toggle that automatically fetches existing metric data from the Google Sheet at a configurable interval. Auto-fetch shall be disabled while the browser tab is not in focus. The implementation shall select a safe default interval and document the resulting daily request volume. This background operation shall read from the sheet only and shall not invoke the Google Tasks API.
+  - Effort: M
+  - Files: JavaScript.html, Index.html
+- **90-degree Danger Zone arrow rotation** — The Danger Zone disclosure arrow shall point right (`→`) while collapsed and down (`↓`) while expanded, using a 90-degree rotation transition rather than a 180-degree rotation.
+  - Effort: S
+  - Files: Styles.html, Index.html
