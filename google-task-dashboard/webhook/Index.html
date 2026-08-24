@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Tasks Dashboard</title>
+
+  <?!= include('Styles'); ?>
+
+  <!-- Google Charts Library -->
+  <script src="https://www.gstatic.com/charts/loader.js"></script>
+</head>
+
+<body>
+  <main class="container">
+    <!-- Header with Title & Action Controls -->
+    <header class="header">
+      <div>
+        <h1>Tasks Dashboard</h1>
+        <p class="subtitle" id="lastUpdatedSubtext">Aggregate Google Tasks Health & Time Series Trends</p>
+      </div>
+
+      <div class="header-actions">
+        <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
+          <span class="btn-icon">📊</span> View Sheet
+        </a>
+        <button id="btnReloadData" class="btn btn-secondary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
+          <span class="btn-icon">🔄</span> Reload Data
+        </button>
+        <button id="btnSyncNow" class="btn btn-primary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
+          <span class="btn-icon">⚡</span> Sync Now
+        </button>
+      </div>
+    </header>
+
+    <!-- Status / Feedback Toast Banner -->
+    <div id="statusBanner" class="status-banner" style="display: none;"></div>
+
+    <!-- Top KPI Summary Cards -->
+    <section class="cards">
+      <div class="card card-blue">
+        <div class="label">Open Tasks</div>
+        <div class="value" id="kpiOpen">-</div>
+        <div class="subtext" id="kpiOpenSubtext">Total incomplete</div>
+      </div>
+
+      <div class="card card-green">
+        <div class="label">Completed in List</div>
+        <div class="value" id="kpiCompleted">-</div>
+        <div class="subtext" id="kpiVelocitySubtext">7d Velocity: - /day</div>
+      </div>
+
+      <div class="card card-red">
+        <div class="label">Overdue Tasks</div>
+        <div class="value" id="kpiOverdue">-</div>
+        <div class="subtext">Past due deadline</div>
+      </div>
+
+      <div class="card card-orange">
+        <div class="label">Overdue Severity</div>
+        <div class="value" id="kpiSeverity">-</div>
+        <div class="subtext">Backlog debt (√days)</div>
+      </div>
+    </section>
+
+    <!-- Interactive Filters & Controls Toolbar -->
+    <section class="controls-toolbar">
+      <div class="control-group">
+        <span class="control-label">Range:</span>
+        <div class="pill-group" id="rangeFilterGroup">
+          <button class="pill" data-range="3" title="Filter chart to show snapshots from the past 3 days" onclick="DashboardApp.setRangeFilter(3)">3D</button>
+          <button class="pill" data-range="7" title="Filter chart to show snapshots from the past 7 days" onclick="DashboardApp.setRangeFilter(7)">7D</button>
+          <button class="pill" data-range="14" title="Filter chart to show snapshots from the past 14 days" onclick="DashboardApp.setRangeFilter(14)">14D</button>
+          <button class="pill active" data-range="30" title="Filter chart to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
+          <button class="pill" data-range="all" title="Show all historical snapshot entries" onclick="DashboardApp.setRangeFilter('all')">All</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <span class="control-label">Series:</span>
+        <div class="pill-group" id="seriesToggleGroup">
+          <label class="toggle-pill pill-open" title="Toggle On-Time Open Tasks (stacked line/area)">
+            <input type="checkbox" id="toggleOpen" checked onchange="DashboardApp.updateChartVisibility()"> On-Time Open
+          </label>
+          <label class="toggle-pill pill-overdue" title="Toggle Overdue Tasks (stacked line/area)">
+            <input type="checkbox" id="toggleOverdue" checked onchange="DashboardApp.updateChartVisibility()"> Overdue
+          </label>
+          <label class="toggle-pill pill-completed" title="Toggle Completed Tasks (stacked line/area)">
+            <input type="checkbox" id="toggleCompleted" checked onchange="DashboardApp.updateChartVisibility()"> Completed
+          </label>
+          <label class="toggle-pill pill-severity" title="Toggle Overdue Severity score (overlay line on right axis)">
+            <input type="checkbox" id="toggleSeverity" checked onchange="DashboardApp.updateChartVisibility()"> Severity (√days Line)
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- Primary Stacked Line + Dual Axis Overlay Combo Chart -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Task Volume Breakdown & Overdue Severity Trend</h2>
+        <span class="panel-badge">Stacked Lines + Severity Overlay</span>
+      </div>
+      <div id="mainChart" class="chart-container">
+        <div class="loading-spinner">Loading chart data...</div>
+      </div>
+    </section>
+
+    <!-- Collapsible Danger Zone for Housekeeping -->
+    <section class="panel danger-zone-panel">
+      <details class="danger-zone-details" open>
+        <summary class="danger-zone-summary" title="Click to expand or collapse dangerous maintenance options">
+          <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
+          <span class="summary-arrow">▼</span>
+        </summary>
+        <div class="danger-zone-content">
+          <div class="danger-zone-setting">
+            <label class="trigger-toggle-label" title="Enable or disable the 3-hour automated background data collection trigger in Apps Script.">
+              <input type="checkbox" id="toggleAutoTrigger" checked onchange="DashboardApp.handleTriggerToggle(this.checked)">
+              <strong>Automated Background Sync (every 3 hours)</strong>
+            </label>
+            <p class="setting-desc">When enabled, Apps Script captures snapshot metrics in the Google Sheet every 3 hours automatically.</p>
+          </div>
+
+          <div class="danger-zone-actions">
+            <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact." onclick="DashboardApp.handleDeleteOldCompletedTasks()">
+              <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
+            </button>
+            <button id="btnSyncClear" class="btn btn-danger" title="Permanently clear and archive all completed tasks from Google Tasks after safely appending a final metrics snapshot to the Google Sheet." onclick="DashboardApp.handleSyncAndClear()">
+              <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
+            </button>
+            <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed." onclick="DashboardApp.handlePruneOldData()">
+              <span class="btn-icon">🧹</span> Prune Old Data (>1 year)
+            </button>
+          </div>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>

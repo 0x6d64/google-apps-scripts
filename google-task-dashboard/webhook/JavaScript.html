@@ -1,0 +1,652 @@
+<script>
+  /**
+   * Encapsulated Dashboard Application Module
+   */
+  const DashboardApp = (function () {
+    let rawData = null;
+    let activeRangeDays = 30;
+    let mainChartInstance = null;
+    let resizeTimer = null;
+
+    /**
+     * Color definitions for consistent stacked line/area and overlay line visualization.
+     */
+    const SERIES_COLORS = {
+      onTimeOpen: '#1a73e8', // Blue (On-time open tasks)
+      overdue: '#d93025',    // Red (Overdue open tasks)
+      completed: '#188038',  // Green (Completed tasks)
+      severity: '#a142f4'    // Purple (Severity line overlay on right axis)
+    };
+
+    /**
+     * Initializes Google Charts, notifications container, and fetches dashboard metrics.
+     */
+    function init() {
+      initNotifications();
+      google.charts.load('current', { packages: ['corechart'] });
+      google.charts.setOnLoadCallback(fetchData);
+      setupResizeHandler();
+    }
+
+    /**
+     * Debounced window resize event listener.
+     */
+    function setupResizeHandler() {
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (rawData) renderCharts();
+        }, 300);
+      });
+    }
+
+    /**
+     * Initializes dynamic notification container in DOM.
+     */
+    function initNotifications() {
+      if (!document.getElementById('notificationContainer')) {
+        const container = document.createElement('div');
+        container.id = 'notificationContainer';
+        container.className = 'notification-container';
+        document.body.appendChild(container);
+      }
+    }
+
+    /**
+     * Displays a compact notification bubble with auto-dismiss.
+     * @param {string} message - Text content (supports newlines)
+     * @param {string} icon - Emoji icon
+     * @param {string} type - 'success' | 'error' | 'info'
+     * @param {number} durationMs - Auto-dismiss timeout (ms)
+     */
+    function showNotification(message, icon, type = 'info', durationMs = 3000) {
+      initNotifications();
+      const container = document.getElementById('notificationContainer');
+      if (!container) return;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'notification-bubble ' + type;
+      bubble.innerHTML = `
+        <span class="notification-icon">${icon}</span>
+        <span class="notification-text">${message}</span>
+        <button class="notification-dismiss" title="Dismiss">×</button>
+      `;
+
+      const dismissBtn = bubble.querySelector('.notification-dismiss');
+      if (dismissBtn) {
+        dismissBtn.addEventListener('click', () => {
+          bubble.classList.add('dismissing');
+          setTimeout(() => bubble.remove(), 250);
+        });
+      }
+
+      container.appendChild(bubble);
+
+      // Keep max 3 bubbles visible at once
+      while (container.children.length > 3) {
+        container.removeChild(container.firstChild);
+      }
+
+      if (durationMs > 0) {
+        setTimeout(() => {
+          if (bubble.parentElement) {
+            bubble.classList.add('dismissing');
+            setTimeout(() => bubble.remove(), 250);
+          }
+        }, durationMs);
+      }
+    }
+
+    /**
+     * Fetches historical time-series data from backend RPC.
+     */
+    function fetchData() {
+      showStatus('Loading data from Google Sheet...', 'info');
+      google.script.run
+        .withSuccessHandler(onDataLoaded)
+        .withFailureHandler(onDataError)
+        .getDashboardData();
+    }
+
+    /**
+     * Handles successful data reception from Apps Script.
+     * @param {Object} data - { headers, rows, sheetUrl, triggerActive }
+     */
+    function onDataLoaded(data) {
+      if (!data || !Array.isArray(data.rows)) {
+        showStatus('Received invalid data format from server.', 'error');
+        return;
+      }
+
+      rawData = JSON.parse(JSON.stringify(data));
+      hideStatus();
+
+      if (data.sheetUrl) {
+        const link = document.getElementById('sheetLink');
+        if (link) link.href = data.sheetUrl;
+      }
+
+      const triggerBox = document.getElementById('toggleAutoTrigger');
+      if (triggerBox) {
+        triggerBox.checked = (typeof data.triggerActive === 'boolean') ? data.triggerActive : true;
+      }
+
+      updateKPIsAndStaleness();
+      renderCharts();
+    }
+
+    /**
+     * Handles data load or sync errors with descriptive messages.
+     * @param {Error|Object|string} err
+     */
+    function onDataError(err) {
+      const msg = (err && (err.message || err.toString())) || 'Unknown server error';
+      showStatus('Operation failed: ' + msg, 'error');
+      showNotification(`Error\n${msg}`, '❌', 'error', 5000);
+    }
+
+    /**
+     * Updates top KPI cards, 7-day velocity metric, and staleness indicator.
+     */
+    function updateKPIsAndStaleness() {
+      if (!rawData || !rawData.rows || rawData.rows.length === 0) return;
+
+      const rows = rawData.rows;
+      const latest = rows[rows.length - 1];
+
+      const totalOpen = typeof latest[1] === 'number' ? latest[1] : 0;
+      const completed = typeof latest[2] === 'number' ? latest[2] : 0;
+      const overdue = typeof latest[3] === 'number' ? latest[3] : 0;
+      const severity = typeof latest[4] === 'number' ? latest[4] : 0;
+      const onTime = Math.max(0, totalOpen - overdue);
+
+      setElemText('kpiOpen', totalOpen);
+      setElemText('kpiOpenSubtext', onTime + ' on-time + ' + overdue + ' overdue');
+      setElemText('kpiCompleted', completed);
+      setElemText('kpiOverdue', overdue);
+      setElemText('kpiSeverity', severity);
+
+      const lastDate = new Date(latest[0]);
+      if (!isNaN(lastDate.getTime())) {
+        const diffMins = Math.floor((Date.now() - lastDate.getTime()) / 60000);
+        const timeAgoStr = diffMins < 1 ? 'Just now' : (diffMins < 60 ? diffMins + ' min ago' : Math.floor(diffMins / 60) + ' hr ago');
+        const tzAbbr = getLocalTimezoneLabel();
+        setElemText('lastUpdatedSubtext', 'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+      }
+
+      calculateVelocity(rows);
+    }
+
+    /**
+     * Computes completion throughput velocity over the past 7 days.
+     * @param {Array<Array<any>>} rows
+     */
+    function calculateVelocity(rows) {
+      const now = Date.now();
+      const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+      const recentRows = rows.filter(r => new Date(r[0]).getTime() >= sevenDaysAgo);
+
+      if (recentRows.length >= 2) {
+        const oldestCompleted = recentRows[0][2];
+        const newestCompleted = recentRows[recentRows.length - 1][2];
+        const diff = Math.max(0, newestCompleted - oldestCompleted);
+        const ratePerDay = (diff / 7).toFixed(1);
+        setElemText('kpiVelocitySubtext', '7d Throughput: ~' + ratePerDay + '/day');
+      } else {
+        setElemText('kpiVelocitySubtext', '7d Throughput: Calculating...');
+      }
+    }
+
+    /**
+     * Re-renders the primary chart.
+     */
+    function renderCharts() {
+      if (!rawData || !rawData.rows || rawData.rows.length === 0) return;
+      drawStackedLineComboChart();
+    }
+
+    /**
+     * Helper to safely read checkbox state with DOM null guard.
+     */
+    function isChecked(elemId) {
+      const el = document.getElementById(elemId);
+      return el ? Boolean(el.checked) : false;
+    }
+
+    /**
+     * Safe DOM text updater with null guard.
+     */
+    function setElemText(elemId, text) {
+      const el = document.getElementById(elemId);
+      if (el) el.innerText = String(text);
+    }
+
+    /**
+     * Retrieves local timezone label.
+     */
+    function getLocalTimezoneLabel() {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+      } catch (e) {
+        return 'Local';
+      }
+    }
+
+    /**
+     * Builds and draws the Stacked Line/Area Chart with Overdue Severity Line Overlay.
+     */
+    function drawStackedLineComboChart() {
+      const chartContainer = document.getElementById('mainChart');
+      if (!chartContainer) return;
+
+      const dataTable = buildDecomposedDataTable();
+      if (!dataTable || dataTable.getNumberOfRows() === 0) {
+        chartContainer.innerHTML = '<div class="loading-spinner">No snapshots available for the selected date range.</div>';
+        return;
+      }
+
+      const dataView = new google.visualization.DataView(dataTable);
+      const visibleCols = [0]; // Time column
+      const seriesConfig = {};
+      let activeSeriesIdx = 0;
+
+      const showOpen = isChecked('toggleOpen');
+      const showOverdue = isChecked('toggleOverdue');
+      const showCompleted = isChecked('toggleCompleted');
+      const showSeverity = isChecked('toggleSeverity');
+
+      // 1. Stacked Lines/Areas on Axis 0 (mutually exclusive segments)
+      if (showOpen) {
+        visibleCols.push(1); // On-Time Open
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.onTimeOpen,
+          areaOpacity: 0.25,
+          lineWidth: 3
+        };
+      }
+      if (showOverdue) {
+        visibleCols.push(2); // Overdue
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.overdue,
+          areaOpacity: 0.35,
+          lineWidth: 3
+        };
+      }
+      if (showCompleted) {
+        visibleCols.push(3); // Completed
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.completed,
+          areaOpacity: 0.20,
+          lineWidth: 2
+        };
+      }
+
+      // 2. Line Overlay on Axis 1 (Severity Debt Score)
+      if (showSeverity) {
+        visibleCols.push(4); // Severity
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'line',
+          targetAxisIndex: 1,
+          color: SERIES_COLORS.severity,
+          lineWidth: 3,
+          pointSize: 5
+        };
+      }
+
+      if (visibleCols.length === 1) {
+        chartContainer.innerHTML = '<div class="loading-spinner">Select at least one metric series above to render chart.</div>';
+        return;
+      }
+
+      if (chartContainer.querySelector('.loading-spinner')) {
+        chartContainer.innerHTML = '';
+        mainChartInstance = null;
+      }
+
+      dataView.setColumns(visibleCols);
+
+      const tzLabel = getLocalTimezoneLabel();
+      const options = {
+        seriesType: 'area',
+        isStacked: true,
+        series: seriesConfig,
+        vAxes: {
+          0: { title: 'Task Volume (Stacked)', minValue: 0, gridlines: { color: '#f1f3f4' } },
+          1: { title: 'Overdue Severity (√days)', minValue: 0, gridlines: { color: 'transparent' } }
+        },
+        hAxis: {
+          title: 'Time (' + tzLabel + ')',
+          gridlines: { color: '#f1f3f4' }
+        },
+        legend: { position: 'top', alignment: 'end' },
+        chartArea: { left: 60, right: 70, top: 30, bottom: 60, width: '85%', height: '75%' },
+        pointSize: 3,
+        interpolateNulls: true,
+        backgroundColor: 'transparent'
+      };
+
+      if (!mainChartInstance) {
+        mainChartInstance = new google.visualization.ComboChart(chartContainer);
+      }
+      mainChartInstance.draw(dataView, options);
+    }
+
+    /**
+     * Constructs a decomposed DataTable where open tasks are split into On-Time Open and Overdue.
+     */
+    function buildDecomposedDataTable() {
+      if (!rawData || !rawData.rows) return null;
+
+      const dataTable = new google.visualization.DataTable();
+      dataTable.addColumn('datetime', 'Time');
+      dataTable.addColumn('number', 'On-Time Open');
+      dataTable.addColumn('number', 'Overdue');
+      dataTable.addColumn('number', 'Completed');
+      dataTable.addColumn('number', 'Overdue Severity (√days)');
+
+      const now = Date.now();
+      const cutoff = activeRangeDays === 'all'
+        ? null
+        : new Date(now - (Number(activeRangeDays) || 30) * 24 * 60 * 60 * 1000);
+
+      const validRows = [];
+      for (let i = 0; i < rawData.rows.length; i++) {
+        const row = rawData.rows[i];
+        if (!row || !row[0]) continue;
+
+        let dateObj = new Date(row[0]);
+        if (isNaN(dateObj.getTime())) {
+          dateObj = new Date(0);
+        }
+
+        if (cutoff && dateObj < cutoff) continue;
+
+        const totalOpen = typeof row[1] === 'number' ? Math.max(0, row[1]) : 0;
+        const completed = typeof row[2] === 'number' ? Math.max(0, row[2]) : 0;
+        const overdue = typeof row[3] === 'number' ? Math.max(0, row[3]) : 0;
+        const severity = typeof row[4] === 'number' ? Math.max(0, row[4]) : 0;
+
+        const onTimeOpen = Math.max(0, totalOpen - overdue);
+        validRows.push([dateObj, onTimeOpen, overdue, completed, severity]);
+      }
+
+      dataTable.addRows(validRows);
+      return dataTable;
+    }
+
+    /**
+     * Sanitizes and sets the active date range filter.
+     * @param {number|string} range
+     */
+    function setRangeFilter(range) {
+      activeRangeDays = (range === 'all') ? 'all' : (Number(range) || 30);
+
+      const pills = document.querySelectorAll('#rangeFilterGroup .pill');
+      pills.forEach(p => {
+        p.classList.toggle('active', p.getAttribute('data-range') === String(range));
+      });
+
+      renderCharts();
+    }
+
+    /**
+     * Handles series checkbox toggles and re-renders.
+     */
+    function updateChartVisibility() {
+      renderCharts();
+    }
+
+    /**
+     * Re-reads existing snapshot rows directly from the Google Sheet without calling Tasks API.
+     */
+    function handleReloadData() {
+      setButtonsDisabled(true);
+      showStatus('Reloading data from Google Sheet...', 'info');
+
+      google.script.run
+        .withSuccessHandler((data) => {
+          setButtonsDisabled(false);
+          showStatus('Data reloaded successfully!', 'success');
+          const now = new Date();
+          showNotification(`Data Reloaded\n${now.toLocaleTimeString()}`, '🔄', 'info', 2000);
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .getDashboardData();
+    }
+
+    /**
+     * Triggers Manual Sync Now RPC with UI lock.
+     */
+    function handleSyncNow() {
+      setButtonsDisabled(true);
+      showStatus('Syncing tasks across all lists from Google Tasks API...', 'info');
+
+      google.script.run
+        .withSuccessHandler((data) => {
+          setButtonsDisabled(false);
+          showStatus('Sync completed successfully!', 'success');
+          if (data && data.rows && data.rows.length > 0) {
+            const latest = data.rows[data.rows.length - 1];
+            showNotification(`Sync Complete\n${latest[1]} open, ${latest[3]} overdue`, '✅', 'success', 3000);
+          }
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .syncNow();
+    }
+
+    /**
+     * Deletes tasks completed more than 8 weeks ago from Google Tasks across all lists.
+     */
+    function handleDeleteOldCompletedTasks() {
+      const confirmed = confirm(
+        '⚠️ DELETE OLD COMPLETED TASKS (>8 WEEKS)\n\n' +
+        'This will permanently delete tasks that were completed more than 8 weeks ago across all your Google Task lists.\n\n' +
+        'Recent completed tasks (<8 weeks) will be kept intact.\n\n' +
+        'Proceed?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Deleting tasks completed > 8 weeks ago across all lists...', 'info');
+
+      google.script.run
+        .withSuccessHandler((result) => {
+          setButtonsDisabled(false);
+          if (!result || !result.success) {
+            const errMsg = (result && result.error) || 'Unknown error';
+            showStatus('Delete failed: ' + errMsg, 'error');
+            showNotification(`Delete failed\n${errMsg}`, '❌', 'error', 5000);
+            return;
+          }
+
+          showStatus(`Deleted ${result.tasksDeleted} old completed tasks. Refreshing dashboard...`, 'success');
+          showNotification(`Old Completed Tasks Deleted\n${result.tasksDeleted} tasks removed (>8w)`, '🗑️', 'success', 4000);
+          if (result.data) {
+            onDataLoaded(result.data);
+          } else {
+            fetchData();
+          }
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .deleteOldCompletedTasks(8);
+    }
+
+    /**
+     * Triggers Sync & Clear Completed Tasks RPC with confirmation.
+     */
+    function handleSyncAndClear() {
+      const confirmed = confirm(
+        '⚠️ PERMANENT ACTION:\n\n' +
+        'This will persist the latest metrics to the Google Sheet and CLEAR/ARCHIVE all completed tasks across all your Google Task lists.\n\n' +
+        'Are you sure you want to proceed?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Persisting metrics and purging completed tasks across all lists...', 'info');
+
+      google.script.run
+        .withSuccessHandler((data) => {
+          setButtonsDisabled(false);
+          showStatus('Completed tasks purged and snapshot persisted successfully!', 'success');
+          if (data && data.rows && data.rows.length > 0) {
+            const latest = data.rows[data.rows.length - 1];
+            showNotification(`Completed tasks purged\n${latest[2]} tasks cleared`, '🔥', 'success', 4000);
+          }
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .syncAndClearTasks();
+    }
+
+    /**
+     * Triggers manual pruning of records older than 1 year to 1 per day.
+     */
+    function handlePruneOldData() {
+      const confirmed = confirm(
+        '⚠️ PRUNE DATA OLDER THAN 1 YEAR\n\n' +
+        'This will reduce all data older than 12 months to 1 entry per day, removing intermediate snapshots.\n\n' +
+        'Your recent data (<1 year) remains untouched.\n\n' +
+        'Continue?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Pruning snapshots older than 1 year down to 1 per day...', 'info');
+
+      google.script.run
+        .withSuccessHandler((result) => {
+          setButtonsDisabled(false);
+          if (!result || !result.success) {
+            const errMsg = (result && result.error) || 'Unknown error';
+            showStatus('Prune failed: ' + errMsg, 'error');
+            showNotification(`Prune failed\n${errMsg}`, '❌', 'error', 5000);
+            return;
+          }
+
+          showPruneResultModal(result);
+          showStatus('Pruning complete. Refreshing dashboard...', 'success');
+          showNotification(`Pruned ${result.totalPruned} rows\nReduced to 1/day`, '🧹', 'success', 4000);
+          fetchData();
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .pruneDataOlderThan1Year();
+    }
+
+    /**
+     * Displays a clean formatted result modal with pruning statistics.
+     * @param {Object} result
+     */
+    function showPruneResultModal(result) {
+      const existing = document.getElementById('pruneResultModal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'pruneResultModal';
+      modal.className = 'modal-overlay';
+      modal.innerHTML = `
+        <div class="modal-card">
+          <h3>✅ Pruning Complete</h3>
+          <table class="prune-stats-table">
+            <tr><td>Total rows before:</td><td>${result.totalBefore}</td></tr>
+            <tr><td>Rows pruned:</td><td>${result.totalPruned}</td></tr>
+            <tr><td>Rows remaining:</td><td>${result.totalAfter}</td></tr>
+            <tr><td>Percentage removed:</td><td>${Number(result.percentageRemoved || 0).toFixed(1)}%</td></tr>
+            <tr><td>Execution time:</td><td>${result.durationMs}ms</td></tr>
+          </table>
+          <div class="modal-footer">
+            <button class="btn btn-primary" onclick="document.getElementById('pruneResultModal').remove()">Close</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    /**
+     * Toggles 3-hour automated background sync trigger.
+     * @param {boolean} enable
+     */
+    function handleTriggerToggle(enable) {
+      showStatus((enable ? 'Enabling' : 'Disabling') + ' automated 3h sync trigger...', 'info');
+      google.script.run
+        .withSuccessHandler((isActive) => {
+          showStatus('Automated background trigger ' + (isActive ? 'enabled' : 'disabled') + '.', 'success');
+          showNotification(
+            isActive ? 'Auto-sync Enabled\nEvery 3 hours' : 'Auto-sync Disabled\nManual sync only',
+            isActive ? '⚡' : '🛑',
+            'success',
+            2000
+          );
+          const triggerBox = document.getElementById('toggleAutoTrigger');
+          if (triggerBox) triggerBox.checked = isActive;
+        })
+        .withFailureHandler(onDataError)
+        .setTriggerEnabled(enable);
+    }
+
+    function setButtonsDisabled(disabled) {
+      const btnSync = document.getElementById('btnSyncNow');
+      const btnReload = document.getElementById('btnReloadData');
+      const btnDeleteOld = document.getElementById('btnDeleteOldCompleted');
+      const btnClear = document.getElementById('btnSyncClear');
+      const btnPrune = document.getElementById('btnPruneOldData');
+      if (btnSync) btnSync.disabled = disabled;
+      if (btnReload) btnReload.disabled = disabled;
+      if (btnDeleteOld) btnDeleteOld.disabled = disabled;
+      if (btnClear) btnClear.disabled = disabled;
+      if (btnPrune) btnPrune.disabled = disabled;
+    }
+
+    function showStatus(message, type) {
+      const banner = document.getElementById('statusBanner');
+      if (!banner) return;
+      banner.className = 'status-banner ' + type;
+      banner.innerText = message;
+      banner.style.display = 'block';
+    }
+
+    function hideStatus() {
+      const banner = document.getElementById('statusBanner');
+      if (banner) banner.style.display = 'none';
+    }
+
+    // Public API
+    return {
+      init: init,
+      setRangeFilter: setRangeFilter,
+      updateChartVisibility: updateChartVisibility,
+      handleReloadData: handleReloadData,
+      handleSyncNow: handleSyncNow,
+      handleDeleteOldCompletedTasks: handleDeleteOldCompletedTasks,
+      handleSyncAndClear: handleSyncAndClear,
+      handlePruneOldData: handlePruneOldData,
+      handleTriggerToggle: handleTriggerToggle
+    };
+  })();
+
+  // Initialize on load
+  DashboardApp.init();
+</script>
