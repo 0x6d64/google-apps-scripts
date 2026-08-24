@@ -334,6 +334,14 @@
     display: none;
   }
 
+  .summary-arrow {
+    transition: transform 0.2s ease;
+  }
+
+  .danger-zone-details[open] .summary-arrow {
+    transform: rotate(180deg);
+  }
+
   .danger-zone-content {
     margin-top: 14px;
     padding-top: 14px;
@@ -529,6 +537,23 @@
 
     h1 {
       font-size: 22px;
+    }
+
+    .cards {
+      display: none;
+    }
+
+    .header-actions {
+      width: 100%;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .btn {
+      flex: 1;
+      justify-content: center;
+      padding: 8px 10px;
+      font-size: 12px;
     }
 
     .controls-toolbar {
