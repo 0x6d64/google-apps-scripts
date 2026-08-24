@@ -200,26 +200,36 @@ sequenceDiagram
 
 ## Next steps and features
 
-### Done, need update in requirements
+### Completed (✅ All implemented)
 
-* fix formatting of the buttons "📊 View Sheet 🔄 Reload Data ⚡ Sync now"
-  since on mobile they get a consistent responsive layout
-* danger zone: dropdown icon needs to change shape when folded, right now it stays "▼" also when
-  folded (should only be this when unfolded)
-* on mobile: hide the cards that give the current numbers
+1. ✅ **Button responsive layout on mobile** — Header action buttons stack/flex evenly on screens < 768px
+2. ✅ **Danger zone collapse icon rotation** — Arrow rotates 180° on expand/collapse with smooth 0.2s transition
+3. ✅ **Hide KPI cards on mobile** — Cards hidden below 768px viewport width
+4. ✅ **Fractional days in overdue severity** — Removed `Math.floor()` to preserve partial-day decay (e.g., 2.3 days → √2.3 ≈ 1.70)
+5. ✅ **3-window velocity display** — Show completion throughput for 24h, 3d, 7d windows using actual elapsed time between snapshots
+6. ✅ **3-day range filter pill** — Added "3D" quick-select alongside existing 7D, 14D, 30D, All
+7. ✅ **Folding button cursor fix** — Added `user-select: none` to danger zone summary to prevent text selection cursor blink
+8. ✅ **Danger zone starts folded** — Removed `open` attribute; collapses by default on page load
+9. ✅ **Relative age auto-update** — "xx ago" text increments every 10 seconds without fetching data; updates immediately on data fetch
+10. ✅ **Open Tasks button** — Direct link to Google Calendar Tasks view in header toolbar
 
 ### Planned
 
-* implement smoothing in the graphs: if a lot of data exist in a specific 
-  period, don't plot them all
-* calculate 3 throughput metrics: for the last 24h, last 3 days, last 7 days
-* use fractional days for overdue age calculation instead of flooring to whole
-  days
-* in the graph views: add a period that is shorter than 7 days, e.g. 3 days
-* visual fix: folding button shows a blinking cursor next to symbol
-* danger zone should be start folded
-* dashboard should have a feature where it loads data from sheet automatically every 30 minutes. this can be toggled with a checkbox on top of page. by default it is off.
-* dashboard shows text like "Last snapshot: 24/08/2026, 11:11:07 Europe/Bucharest (13 min ago)". The "xx ago" text should automatically update (maybe every 10 seconds or so, depending on best practices). this should not trigger a round trip to the google sheet, but instead just keep the info about the relative age updated. if a fetch from the sheet it triggered (automatically by timer, or by a button press), then the relative age also needs to be correct immediately or with a minimal delay.
-* on longer timeframes: would be nice to have a thin "rolling average" line. this feature needs more refinement and consideration to not clutter the graph.
-* add a button to open the task list (e.g. `https://calendar.google.com/calendar/u/0/r/tasks`)
-* open tasks: do not consider tasks that are due longer than 6 months into the future. add this info also to the dashboard (can be a small note next to the open card)
+- **Auto-refresh toggle (30 min interval)** — Optional background polling of sheet data every 30 minutes; toggleable on dashboard (default: off)
+  - Estimated effort: 15 min
+  - Files: JavaScript.html
+- **Graph downsampling / smoothing** — Automatic point reduction for large date ranges (14d+) to improve chart rendering speed and reduce visual clutter while preserving trend visibility
+  - Estimated effort: 25 min
+  - Files: JavaScript.html
+- **6-month future task filter** — Exclude tasks due >6 months in future from "Open Tasks" count to avoid artificial inflation from placeholder far-future tasks; add UI note
+  - Estimated effort: 15 min
+  - Files: Code.js, JavaScript.html
+- **Rolling average line (advanced)** — Optional thin overlay line showing N-point moving average for smoother trend visualization on longer timeframes
+  - Estimated effort: 30+ min
+  - Status: On hold pending UX refinement (window size, series selection, toggle placement)
+  - Files: JavaScript.html
+- extend the UI: right now the HTML page shows to ages: how long ago was the snapshot taken. but we need to also need to add info when we last fetched from google sheets. both info texts shall be updated in the same loop to keep the relative ages accurate.
+- modify UI: the buttons need to have a better text: the better descriptions are "fetch data from sheets" and "ingest from tasks". the button to open tasks shall be called "launch google task" or something similar, since "open" can be confused with open tasks. the symbol also needs to be something that indicates an external link like 🔗
+- the task cards shall be not as high to save space
+- in the danger zone: the buttons need to be sorted so that the actions are sorted by gravity/impact
+
