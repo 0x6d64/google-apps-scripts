@@ -94,6 +94,35 @@ rely on the Google auth for access.
     * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
 * Lightweight responsive styling for desktop and mobile. On small screens, the KPI summary cards are hidden and the header action buttons use a consistent responsive layout.
 
+* **Dashboard behavior and responsive requirements:**
+  * On viewports narrower than 768 px, the header action buttons shall use a
+    responsive layout that stacks or distributes them evenly while remaining
+    usable on small screens.
+  * On viewports narrower than 768 px, the KPI summary cards shall be hidden.
+  * The Danger Zone shall be collapsed by default when the dashboard is opened.
+    Expanding and collapsing it shall rotate the disclosure arrow smoothly by
+    90 degrees: right-pointing (`→`) when collapsed and down-pointing (`↓`)
+    when expanded.
+  * The Danger Zone summary shall prevent text selection while it is being
+    clicked or toggled, so the interaction shall not show a text-selection
+    cursor or blinking insertion cursor.
+  * The dashboard shall display completion throughput velocity for 24-hour,
+    3-day, and 7-day windows. Each velocity shall be calculated using the
+    actual elapsed time between the snapshots used for that window rather than
+    assuming a fixed sampling interval.
+  * The date-range controls shall provide a dedicated 3-day (`3D`) quick
+    filter in addition to 7-day, 14-day, 30-day, and All ranges.
+  * The overdue severity calculation shall retain fractional overdue days.
+    For example, an overdue age of 2.3 days shall contribute `sqrt(2.3)` to
+    the severity score rather than being truncated to 2 days before applying
+    the square root.
+  * The dashboard shall continuously refresh the relative age of the latest
+    snapshot without making backend requests solely for this display. The
+    relative age shall update at least every 10 seconds and shall be refreshed
+    immediately whenever new dashboard data is fetched.
+  * The header shall provide a direct link to the Google Tasks view in Google
+    Calendar, opening it in a separate browser tab.
+
 ## Workflows
 
 ### Sync & Clear Done Tasks Sequence
