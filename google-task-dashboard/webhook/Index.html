@@ -25,6 +25,9 @@
         <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
           <span class="btn-icon">📊</span> View Sheet
         </a>
+        <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
+          <span class="btn-icon">✓</span> Open Tasks
+        </a>
         <button id="btnReloadData" class="btn btn-secondary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
           <span class="btn-icon">🔄</span> Reload Data
         </button>
@@ -109,7 +112,7 @@
 
     <!-- Collapsible Danger Zone for Housekeeping -->
     <section class="panel danger-zone-panel">
-      <details class="danger-zone-details" open>
+      <details class="danger-zone-details">
         <summary class="danger-zone-summary" title="Click to expand or collapse dangerous maintenance options">
           <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
           <span class="summary-arrow">▼</span>

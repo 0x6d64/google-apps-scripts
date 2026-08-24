@@ -7,6 +7,8 @@
     let activeRangeDays = 30;
     let mainChartInstance = null;
     let resizeTimer = null;
+    let stalenessUpdateTimer = null;
+    let lastSnapshotTime = null;
 
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
@@ -26,6 +28,7 @@
       google.charts.load('current', { packages: ['corechart'] });
       google.charts.setOnLoadCallback(fetchData);
       setupResizeHandler();
+      setupStalenessUpdateTimer();
     }
 
     /**
@@ -38,6 +41,17 @@
           if (rawData) renderCharts();
         }, 300);
       });
+    }
+
+    /**
+     * Sets up timer to update relative age ("xx ago") every 10 seconds without fetching data.
+     */
+    function setupStalenessUpdateTimer() {
+      stalenessUpdateTimer = setInterval(() => {
+        if (lastSnapshotTime) {
+          updateStalenessDisplay();
+        }
+      }, 10 * 1000); // Update every 10 seconds
     }
 
     /**
@@ -146,7 +160,7 @@
     }
 
     /**
-     * Updates top KPI cards, 7-day velocity metric, and staleness indicator.
+     * Updates top KPI cards and staleness indicator. Stores snapshot time for relative age updates.
      */
     function updateKPIsAndStaleness() {
       if (!rawData || !rawData.rows || rawData.rows.length === 0) return;
@@ -168,17 +182,43 @@
 
       const lastDate = new Date(latest[0]);
       if (!isNaN(lastDate.getTime())) {
-        const diffMins = Math.floor((Date.now() - lastDate.getTime()) / 60000);
-        const timeAgoStr = diffMins < 1 ? 'Just now' : (diffMins < 60 ? diffMins + ' min ago' : Math.floor(diffMins / 60) + ' hr ago');
-        const tzAbbr = getLocalTimezoneLabel();
-        setElemText('lastUpdatedSubtext', 'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+        lastSnapshotTime = lastDate.getTime();
+        updateStalenessDisplay();
       }
 
       calculateVelocity(rows);
     }
 
     /**
-     * Computes completion throughput velocity over the past 7 days.
+     * Updates the relative age display ("xx min ago") without fetching data.
+     * Called every 10 seconds by timer, and immediately after data fetch.
+     */
+    function updateStalenessDisplay() {
+      if (!lastSnapshotTime) return;
+
+      const diffMins = Math.floor((Date.now() - lastSnapshotTime) / 60000);
+      const timeAgoStr = formatTimeAgo(diffMins);
+      const tzAbbr = getLocalTimezoneLabel();
+      const lastDate = new Date(lastSnapshotTime);
+
+      setElemText('lastUpdatedSubtext',
+        'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+    }
+
+    /**
+     * Formats relative time string for display.
+     * @param {number} minutes - Minutes elapsed
+     * @return {string}
+     */
+    function formatTimeAgo(minutes) {
+      if (minutes < 1) return 'Just now';
+      if (minutes < 60) return minutes + ' min ago';
+      return Math.floor(minutes / 60) + ' hr ago';
+    }
+
+    /**
+     * Calculates completion throughput velocity over 7-day window.
+     * Uses actual elapsed time between oldest and newest snapshots.
      * @param {Array<Array<any>>} rows
      */
     function calculateVelocity(rows) {
@@ -190,10 +230,17 @@
         const oldestCompleted = recentRows[0][2];
         const newestCompleted = recentRows[recentRows.length - 1][2];
         const diff = Math.max(0, newestCompleted - oldestCompleted);
-        const ratePerDay = (diff / 7).toFixed(1);
-        setElemText('kpiVelocitySubtext', '7d Throughput: ~' + ratePerDay + '/day');
+
+        // Actual elapsed time between oldest and newest snapshot
+        const oldestTime = new Date(recentRows[0][0]).getTime();
+        const newestTime = new Date(recentRows[recentRows.length - 1][0]).getTime();
+        const elapsedMs = Math.max(1, newestTime - oldestTime);
+        const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
+
+        const ratePerDay = (diff / elapsedDays).toFixed(1);
+        setElemText('kpiVelocitySubtext', '7d Velocity: ~' + ratePerDay + '/day');
       } else {
-        setElemText('kpiVelocitySubtext', '7d Throughput: Calculating...');
+        setElemText('kpiVelocitySubtext', '7d Velocity: Calculating...');
       }
     }
 
@@ -218,7 +265,7 @@
      */
     function setElemText(elemId, text) {
       const el = document.getElementById(elemId);
-      if (el) el.innerText = String(text);
+      if (el) el.textContent = text;
     }
 
     /**
@@ -413,8 +460,7 @@
         .withSuccessHandler((data) => {
           setButtonsDisabled(false);
           showStatus('Data reloaded successfully!', 'success');
-          const now = new Date();
-          showNotification(`Data Reloaded\n${now.toLocaleTimeString()}`, '🔄', 'info', 2000);
+          showNotification('Data Reloaded\nRefreshing dashboard...', '🔄', 'success', 2000);
           onDataLoaded(data);
         })
         .withFailureHandler((err) => {
