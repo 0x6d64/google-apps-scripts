@@ -200,16 +200,19 @@ sequenceDiagram
 
 ## Next steps and features
 
+### Done, need update in requirements
+
+* fix formatting of the buttons "📊 View Sheet 🔄 Reload Data ⚡ Sync now"
+  since on mobile they get a consistent responsive layout
+* danger zone: dropdown icon needs to change shape when folded, right now it stays "▼" also when
+  folded (should only be this when unfolded)
+* on mobile: hide the cards that give the current numbers
+
+### Planned
+
 * implement smoothing in the graphs: if a lot of data exist in a specific 
   period, don't plot them all
-* fix formatting of the buttons "📊 View Sheet 🔄 Reload Data ⚡ Sync now" 
-  since on mobile they get a consistent responsive layout
-* on mobile: hide the cards that give the current numbers
-* danger zone: dropdown icon needs to change shape when folded, right now it 
-  stays "▼" also when folded (should only be this when unfolded)
-* make the throughput time window configurable (default: 7 days) and calculate
-  throughput using the actual elapsed time between the oldest and newest
-  snapshots in the selected window
+* calculate 3 throughput metrics: for the last 24h, last 3 days, last 7 days
 * use fractional days for overdue age calculation instead of flooring to whole
   days
 * in the graph views: add a period that is shorter than 7 days, e.g. 3 days
