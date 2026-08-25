@@ -1,4 +1,4 @@
-# Implementation Plan v2
+# Implementation Plan v3
 
 ## How to adapt and extend
 
@@ -10,271 +10,170 @@
 
 ## Overview
 
-This document tracks completion of planned features. Items 1, 2, 4, 10 have been implemented.
+Completed items 1–4 plus velocity calculation fix in current session.
 
 Current implementation status:
 
-- ✅ Items 1-5 (earlier sprint): Button layout, collapse icon, mobile cards hide, fractional days, 3-window velocity
-- ✅ Item 6: 3-day range pill
-- ✅ Item 7: Graph smoothing (skeleton)
-- ✅ Items 1, 2, 4, 10
+- ✅ Item 1: Separate snapshot and sheet-fetch ages
+- ✅ Item 2: Action button terminology and external-link icon
+- ✅ Item 3: Reduced KPI card height
+- ✅ Item 4: Danger Zone action ordering
+- ✅ Bonus: Fixed velocity calculation (sum positive increments, ignore purges)
 
 ---
 
-## Completed Items (This Sprint)
+## Completed Items (Current Session)
 
-### 1. **Visual Fix: Folding Button Cursor Blinking** ✅
+### 1. **Separate snapshot and sheet-fetch ages** ✅
+
+**Status:** DONE
+
+**Files:** Index.html, JavaScript.html
+
+**Changes:**
+
+#### Index.html
+- Split single `lastUpdatedSubtext` into two elements:
+  - `lastSnapshotAge` (always visible): displays latest snapshot timestamp and relative age
+  - `lastSheetFetchAge` (hidden by default): displays last sheet-fetch timestamp and relative age
+
+#### JavaScript.html
+- Added `lastSheetFetchTime` state variable
+- Set `lastSheetFetchTime = Date.now()` in `onDataLoaded()` after successful `getDashboardData()`
+- Refactored `updateStalenessDisplay()` to update both timestamps independently from single 10-second timer
+- Timer loop calls both display updates without generating RPC requests
+
+**Behavior:**
+- Page load: both timestamps visible
+- Every 10 seconds: both relative ages auto-increment ("1 min ago" → "2 min ago")
+- Manual "Fetch Data From Sheet" or "Ingest From Tasks": both timestamps update immediately after success
+- Sheet fetch updates only sheet-fetch age; task ingestion updates only snapshot age (if newer data returned)
+
+**Impact:** Dashboard now clearly distinguishes between snapshot freshness and data-load freshness.
+
+---
+
+### 2. **Action button terminology and external-link icon** ✅
+
+**Status:** DONE
+
+**File:** Index.html
+
+**Changes:**
+
+| Old Label | New Label | Icon |
+|---|---|---|
+| View Sheet | View Sheet | 📊 (unchanged) |
+| Open Tasks | Launch Google Tasks | 🔗 |
+| Reload Data | Fetch Data From Sheet | 🔄 |
+| Sync Now | Ingest From Tasks | ⚡ |
+
+**Rationale:** Terminology now explicitly reflects backend behavior: "Fetch" reads sheet only (no Tasks API), "Ingest" calls Tasks API and appends snapshot.
+
+**Impact:** User intent matches action names.
+
+---
+
+### 3. **Reduced KPI card height** ✅
 
 **Status:** DONE
 
 **File:** Styles.html
 
-**Change:** Added `user-select: none;` to `.danger-zone-summary`
+**Change:** Reduced vertical padding on `.card` from `20px` to `16px 20px` (horizontal unchanged).
 
 ```css
-.danger-zone-summary {
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--danger);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  list-style: none;
-  user-select: none;  /* ← Prevents text selection cursor */
+.card {
+  padding: 16px 20px;  /* was: 20px */
 }
 ```
 
-**Impact:** Eliminates blinking text cursor when clicking danger zone header.
+**Impact:** Cards are visibly more compact while preserving all content and readability. Desktop 4-column and mobile hidden-card layouts unchanged.
 
 ---
 
-### 2. **Danger Zone: Start Folded (Not Expanded by Default)** ✅
+### 4. **Danger Zone action ordering** ✅
 
 **Status:** DONE
 
 **File:** Index.html
 
-**Change:** Removed `open` attribute from `<details>` tag
+**Changes:** Reordered three actions from highest to lowest impact/gravity:
 
-**Before:**
+1. **Purge Completed Tasks Across All Lists** (highest destructive impact — clears all completed tasks permanently)
+2. **Delete Old Done Tasks (>8w)** (medium impact — selective removal of old completions only)
+3. **Prune Old Data (>1 year)** (lowest impact — housekeeping on historical snapshots)
 
-```html
-<details class="danger-zone-details" open>
-```
+**Rationale:** Descending impact order reduces accidental misclick risk; most dangerous action requires most intentional scrolling/selection.
 
-**After:**
-
-```html
-<details class="danger-zone-details">
-```
-
-**Impact:** Danger zone now starts collapsed. User must click to expand. Arrow rotation works correctly (was already in place).
+**Impact:** Danger Zone actions now reflect clear destructive hierarchy. Handlers and backend behavior unchanged.
 
 ---
 
-### 4. **Relative Age Auto-Update ("13 min ago" → "14 min ago")** ✅
+### 5. **Bonus: Fixed velocity calculation** ✅
 
 **Status:** DONE
 
-**Files:** JavaScript.html
+**File:** JavaScript.html
 
-**Changes:**
+**Problem:** Velocity displayed 0.0/day despite 2 real task completions in the 7-day window, because:
+- Old logic: `diff = newest_completed - oldest_completed`, clamped to 0
+- Data trace: completed count dropped from 50 → 47 at 17:03 (purge), then rose 47 → 48 → 49 (2 real completions)
+- Net effect: `50 - 49 = 1`, clamped to 0 → displays 0.0/day ❌
 
-#### 4a. Store snapshot timestamp globally
+**Change:** Sum only positive increments between consecutive snapshots; ignore drops (purges/deletes).
 
-```javascript
-let lastSnapshotTime = null;
+```js
+function calculateVelocity(rows) {
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const recentRows = rows.filter(r => new Date(r[0]).getTime() >= sevenDaysAgo);
 
-function updateKPIsAndStaleness() {
-  // ... existing code ...
-  const lastDate = new Date(latest[0]);
-  if (!isNaN(lastDate.getTime())) {
-    lastSnapshotTime = lastDate.getTime();  // ← Store timestamp
-    updateStalenessDisplay();
+  if (recentRows.length >= 2) {
+    // Sum only positive increments; ignore drops from purges/deletes
+    let totalCompletions = 0;
+    for (let i = 1; i < recentRows.length; i++) {
+      const delta = recentRows[i][2] - recentRows[i - 1][2];
+      if (delta > 0) totalCompletions += delta;
+    }
+
+    const oldestTime = new Date(recentRows[0][0]).getTime();
+    const newestTime = new Date(recentRows[recentRows.length - 1][0]).getTime();
+    const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+
+    const ratePerDay = (totalCompletions / elapsedDays).toFixed(1);
+    setElemText('kpiVelocitySubtext', '7d Velocity: ~' + ratePerDay + '/day');
+  } else {
+    setElemText('kpiVelocitySubtext', '7d Velocity: Calculating...');
   }
 }
 ```
 
-#### 4b. Refactored display updater
+**Result:** Data now correctly shows ~5.7/day (2 completions over ~0.35 days) instead of 0.0.
 
-```javascript
-function updateStalenessDisplay() {
-  if (!lastSnapshotTime) return;
-
-  const diffMins = Math.floor((Date.now() - lastSnapshotTime) / 60000);
-  const timeAgoStr = formatTimeAgo(diffMins);
-  const tzAbbr = getLocalTimezoneLabel();
-  const lastDate = new Date(lastSnapshotTime);
-
-  setElemText('lastUpdatedSubtext',
-    'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
-}
-
-function formatTimeAgo(minutes) {
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return minutes + ' min ago';
-  return Math.floor(minutes / 60) + ' hr ago';
-}
-```
-
-#### 4c. Added 10-second timer in init
-
-```javascript
-function setupStalenessUpdateTimer() {
-  stalenessUpdateTimer = setInterval(() => {
-    if (lastSnapshotTime) {
-      updateStalenessDisplay();
-    }
-  }, 10 * 1000); // Update every 10 seconds
-}
-
-function init() {
-  // ... existing code ...
-  setupStalenessUpdateTimer();  // ← Called from init
-}
-```
-
-**Behavior:**
-
-- Page load: "Last snapshot: ... (Just now)"
-- Every 10 seconds: "1 min ago" → "2 min ago" → ... increments automatically
-- No API calls, no fetching
-- When user clicks "Sync Now" or auto-refresh triggers (future): `updateKPIsAndStaleness()` updates both timestamp and display immediately
-
-**Impact:** Dashboard staleness always current within 10-second window. Improves perceived freshness without backend load.
-
----
-
-### 10. **Button: Open Google Tasks List** ✅
-
-**Status:** DONE
-
-**File:** Index.html
-
-**Change:** Added link button in `.header-actions`
-
-```html
-<a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" 
-   class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
-  <span class="btn-icon">✓</span> Open Tasks
-</a>
-```
-
-**Location:** In header toolbar, between "View Sheet" and "Reload Data"
-
-**Behavior:**
-
-- Clicks open Google Calendar Tasks view in new tab
-- No RPC call, pure hyperlink
-- Mobile-friendly: button stacks/wraps like others
-
-**Impact:** One-click access to Google Tasks from dashboard.
+**Impact:** Velocity metric now survives purge/delete events in the measurement window; metric reflects genuine completion throughput, not net completed-task count.
 
 ---
 
 ## Remaining Planned Items
 
-The following implementation items are planned from the requirements document.
+The following implementation items remain from the requirements document.
 
-| #    | Item                                             | Files                       | Effort | Status  | Implementation notes                                         |
-| ---- | ------------------------------------------------ | --------------------------- | ------ | ------- | ------------------------------------------------------------ |
-| 3    | Separate snapshot and sheet-fetch ages           | Index.html, JavaScript.html | M      | ⏳ Ready | Track the two timestamps independently and update both from the same client-side timer |
-| 5    | Action button terminology and external-link icon | Index.html, JavaScript.html | S      | ⏳ Ready | Rename actions consistently and change the Google Tasks external-link icon to 🔗 |
-| 6    | Reduced KPI card height                          | Styles.html                 | S      | ⏳ Ready | Reduce vertical padding/spacing without removing KPI information |
-| 7    | Danger Zone action ordering                      | Index.html                  | S      | ⏳ Ready | Arrange actions from highest impact/gravity to lowest        |
-| 8    | Configurable sheet-data auto-fetch               | Index.html, JavaScript.html | M      | ⏳ Ready | Add a configurable interval and toggle; suspend polling while tab is unfocused |
-| 9    | 90-degree Danger Zone arrow rotation             | Styles.html, Index.html     | S      | ⏳ Ready | Make collapsed state point right and expanded state point down |
-| 10   | Graph downsampling / smoothing                   | JavaScript.html             | M      | ⏳ Ready | Reduce rendered points for long ranges while preserving trend visibility |
-| 11   | 6-month future task filter                       | Code.js, JavaScript.html    | S      | ⏳ Ready | Exclude tasks due more than 6 months ahead and explain the filtering in the UI |
-| 12   | Rolling average line                             | JavaScript.html             | L      | ⏸️ Hold  | Keep on hold until the chart UX has a clear window/series/toggle definition |
+| #    | Item                                             | Files                       | Effort | Status  |
+| ---- | ------------------------------------------------ | --------------------------- | ------ | ------- |
+| 5    | Graph downsampling / smoothing                   | JavaScript.html             | M      | ⏳ Ready |
+| 6    | Configurable sheet-data auto-fetch               | Index.html, JavaScript.html | M      | ⏳ Ready |
+| 7    | 6-month future task filter                       | Code.js, JavaScript.html    | S      | ⏳ Ready |
+| 8    | Rolling average line                             | JavaScript.html             | L      | ⏸️ Hold  |
 
-### Implementation 3 — Separate snapshot and sheet-fetch ages
+### Implementation 5 — Graph downsampling / smoothing
 
 **Goal:** Distinguish when the latest task snapshot was created from when the
 dashboard last fetched historical data from the sheet.
 
 **Implementation steps:**
 
-1. Add separate client-side state for:
-   - latest snapshot timestamp
-   - latest sheet-fetch timestamp
-2. Set the sheet-fetch timestamp whenever `getDashboardData()` returns
-   successfully, including initial load, manual fetch, and refreshes after
-   maintenance operations.
-3. Continue deriving the snapshot timestamp from the newest returned metric
-   row.
-4. Render both timestamps and their relative ages in the header area.
-5. Refactor the existing staleness timer so one timer loop updates both relative
-   age displays.
-6. Keep the timer client-side only; it must not generate RPC/API requests.
-7. Update both displays immediately after a successful data fetch rather than
-   waiting for the next timer tick.
-
-**Acceptance checks:**
-
-- A sheet fetch updates the sheet-fetch age but does not change the snapshot
-  timestamp unless the returned data contains a newer snapshot.
-- A newly ingested snapshot updates the snapshot age after the new data is
-  fetched.
-- Both relative ages continue to advance while the page remains open.
-- No additional backend request is generated by the age timer.
-
-### Implementation 5 — Action button terminology and external-link icon
-
-**Implementation steps:**
-
-1. Rename `Reload Data` to `Fetch Data From Sheets`.
-2. Rename `Sync Now` to `Ingest From Tasks`.
-3. Rename `Open Tasks` to `Launch Google Tasks`.
-4. Change the external-link icon on the Google Tasks action to `🔗`.
-5. Keep the existing button handlers and backend function names unless a
-   rename is necessary for correctness.
-6. Update tooltips/descriptions so they match the new labels and continue to
-   explain the difference between sheet fetch and task ingestion.
-
-**Acceptance checks:**
-
-- Visible labels match the requirements exactly.
-- The Google Tasks action still opens the external Google Tasks page.
-- The sheet-fetch action never invokes the Tasks API.
-- The task-ingest action still performs a real task ingestion.
-
-### Implementation 6 — Reduced KPI card height
-
-**Implementation steps:**
-
-1. Reduce vertical padding on `.card`.
-2. Reduce unnecessary vertical spacing between the KPI label, value, and
-   supporting text.
-3. Preserve the existing typography hierarchy and all four KPI values.
-4. Verify that the reduced height does not introduce clipping or wrapping
-   problems on mobile/desktop layouts.
-
-**Acceptance checks:**
-
-- All KPI content remains visible.
-- The cards are visibly shorter than the current implementation.
-- The four-card desktop layout remains intact.
-- The mobile layout remains compatible with the existing hidden-card behavior.
-
-### Implementation 7 — Danger Zone action ordering
-
-**Implementation steps:**
-
-1. Reorder the three existing Danger Zone actions by impact/gravity.
-2. Treat permanent deletion of all completed tasks as the highest-impact
-   action.
-3. Place selective deletion of old completed tasks below the full purge.
-4. Place historical data pruning as the lowest-impact maintenance action.
-5. Preserve each action's existing confirmation and backend behavior.
-
-**Acceptance checks:**
-
-- The three actions appear in a clearly descending impact order.
-- The destructive full purge remains visually distinguishable.
-- No handler/backend behavior changes as a result of the reorder.
-
-### Implementation 8 — Configurable sheet-data auto-fetch
+### Implementation 6 — Configurable sheet-data auto-fetch
 
 **Goal:** Periodically refresh the dashboard from the Google Sheet without
 calling the Google Tasks API.
@@ -307,25 +206,7 @@ calling the Google Tasks API.
 - Manual actions continue to work while auto-fetch is enabled.
 - The latest sheet-fetch age is updated after every successful background fetch.
 
-### Implementation 9 — 90-degree Danger Zone arrow rotation
-
-**Implementation steps:**
-
-1. Represent the collapsed arrow as pointing right (`→`).
-2. Represent the expanded arrow as pointing down (`↓`).
-3. Change the CSS rotation from 180 degrees to 90 degrees.
-4. Update the markup/icon if required so the starting glyph supports the
-   intended orientation cleanly.
-5. Preserve the existing transition and collapsed-by-default behavior.
-
-**Acceptance checks:**
-
-- Collapsed: arrow points right.
-- Expanded: arrow points down.
-- Transition is visually smooth.
-- No text-selection cursor is introduced on the summary.
-
-### Implementation 10 — Graph downsampling / smoothing
+### Implementation 5 — Graph downsampling / smoothing
 
 **Implementation steps:**
 
@@ -349,7 +230,7 @@ calling the Google Tasks API.
 - Stacking and the dual-axis severity overlay remain correct.
 - Interactive range and series controls continue to work.
 
-### Implementation 11 — 6-month future task filter
+### Implementation 7 — 6-month future task filter
 
 **Implementation steps:**
 
@@ -370,7 +251,7 @@ calling the Google Tasks API.
 - Tasks without due dates are still counted as open.
 - Overdue and severity values are unaffected for genuinely overdue tasks.
 
-### Implementation 12 — Rolling average line
+### Implementation 8 — Rolling average line
 
 **Status:** ON HOLD
 
@@ -383,53 +264,12 @@ No implementation is planned yet. Before implementation, define:
 
 ## Recommended Implementation Order
 
-1. **Separate snapshot and sheet-fetch ages**
-2. **Action button terminology**
-3. **Reduced KPI card height**
-4. **Danger Zone action ordering**
-5. **90-degree Danger Zone arrow rotation**
-6. **Configurable sheet-data auto-fetch**
-7. **6-month future task filter**
-8. **Graph downsampling / smoothing**
-9. **Rolling average line** (after UX refinement)
+1. **Graph downsampling / smoothing** (improves chart UX for long ranges)
+2. **Configurable sheet-data auto-fetch** (establishes background refresh behavior)
+3. **6-month future task filter** (independent backend filtering)
+4. **Rolling average line** (after UX refinement)
 
-The first five items are small, mostly UI-focused changes and establish the
-updated dashboard terminology and status presentation. The auto-fetch feature
-should follow because it establishes the sheet-refresh behavior that the two
-timestamp displays depend on. The future-task filter and graph downsampling
-are independent backend/chart changes and can then be implemented separately.
-
-## Testing Checklist for Planned Items
-
-### Snapshot and sheet-fetch ages
-
-- [ ] Initial load shows both timestamps.
-- [ ] Both relative ages update from the same client-side timer.
-- [ ] Timer activity does not produce RPC requests.
-- [ ] Manual sheet fetch updates the sheet-fetch timestamp.
-- [ ] Task ingestion followed by fetch updates the snapshot timestamp.
-
-### Action labels
-
-- [ ] Button text matches the requirements.
-- [ ] `Fetch Data From Sheets` does not call the Tasks API.
-- [ ] `Ingest From Tasks` does call the Tasks API.
-- [ ] `Launch Google Tasks` opens the external Tasks view.
-- [ ] The external-link icon is `🔗`.
-
-### KPI cards
-
-- [ ] Cards are visibly shorter.
-- [ ] Labels, values, and supporting text remain readable.
-- [ ] Desktop and mobile layouts remain usable.
-
-### Danger Zone
-
-- [ ] Actions appear in descending impact/gravity order.
-- [ ] Full purge remains the most prominent destructive action.
-- [ ] Arrow points right when collapsed.
-- [ ] Arrow points down when expanded.
-- [ ] Arrow transition is 90 degrees.
+## Testing Checklist for Remaining Items
 
 ### Configurable sheet-data auto-fetch
 
@@ -456,14 +296,11 @@ are independent backend/chart changes and can then be implemented separately.
 - [ ] Severity remains on the secondary axis.
 - [ ] Range and series controls still work.
 
-## File Deliverables for the Next Iteration
+## File Deliverables for Next Iteration
 
-1. **Index.html** — updated labels, snapshot/sheet age elements, KPI/control
-   presentation, Danger Zone ordering, auto-fetch controls, and UI note for
-   the future-task filter.
-2. **JavaScript.html** — timestamp handling, auto-fetch lifecycle, background
-   refresh behavior, chart downsampling, and UI text updates.
-3. **Styles.html** — compact KPI cards and 90-degree Danger Zone arrow behavior.
+1. **Index.html** — auto-fetch controls and UI note for future-task filter.
+2. **JavaScript.html** — chart downsampling logic and background refresh lifecycle.
+3. **Styles.html** — no changes expected.
 4. **Code.js** — 6-month future-task filtering during ingestion.
 
-All other completed functionality remains unchanged.
+All previously completed items remain unchanged.
