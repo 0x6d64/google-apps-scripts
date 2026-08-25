@@ -18,7 +18,8 @@
     <header class="header">
       <div>
         <h1>Tasks Dashboard</h1>
-        <p class="subtitle" id="lastUpdatedSubtext">Aggregate Google Tasks Health & Time Series Trends</p>
+        <p class="subtitle" id="lastSnapshotAge">Aggregate Google Tasks Health & Time Series Trends</p>
+        <p class="subtitle" id="lastSheetFetchAge" style="display: none;"></p>
       </div>
 
       <div class="header-actions">
@@ -26,13 +27,13 @@
           <span class="btn-icon">📊</span> View Sheet
         </a>
         <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
-          <span class="btn-icon">✓</span> Open Tasks
+          <span class="btn-icon">🔗</span> Launch Google Tasks
         </a>
         <button id="btnReloadData" class="btn btn-secondary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
-          <span class="btn-icon">🔄</span> Reload Data
+          <span class="btn-icon">🔄</span> Fetch Data From Sheet
         </button>
         <button id="btnSyncNow" class="btn btn-primary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
-          <span class="btn-icon">⚡</span> Sync Now
+          <span class="btn-icon">⚡</span> Ingest From Tasks
         </button>
       </div>
     </header>
@@ -127,11 +128,11 @@
           </div>
 
           <div class="danger-zone-actions">
-            <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact." onclick="DashboardApp.handleDeleteOldCompletedTasks()">
-              <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
-            </button>
             <button id="btnSyncClear" class="btn btn-danger" title="Permanently clear and archive all completed tasks from Google Tasks after safely appending a final metrics snapshot to the Google Sheet." onclick="DashboardApp.handleSyncAndClear()">
               <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
+            </button>
+            <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact." onclick="DashboardApp.handleDeleteOldCompletedTasks()">
+              <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
             </button>
             <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed." onclick="DashboardApp.handlePruneOldData()">
               <span class="btn-icon">🧹</span> Prune Old Data (>1 year)

@@ -9,6 +9,7 @@
     let resizeTimer = null;
     let stalenessUpdateTimer = null;
     let lastSnapshotTime = null;
+    let lastSheetFetchTime = null;
 
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
@@ -135,6 +136,9 @@
       rawData = JSON.parse(JSON.stringify(data));
       hideStatus();
 
+      // Set sheet-fetch timestamp on every successful data load
+      lastSheetFetchTime = Date.now();
+
       if (data.sheetUrl) {
         const link = document.getElementById('sheetLink');
         if (link) link.href = data.sheetUrl;
@@ -194,15 +198,29 @@
      * Called every 10 seconds by timer, and immediately after data fetch.
      */
     function updateStalenessDisplay() {
-      if (!lastSnapshotTime) return;
+      if (lastSnapshotTime) {
+        const diffMins = Math.floor((Date.now() - lastSnapshotTime) / 60000);
+        const timeAgoStr = formatTimeAgo(diffMins);
+        const tzAbbr = getLocalTimezoneLabel();
+        const lastDate = new Date(lastSnapshotTime);
 
-      const diffMins = Math.floor((Date.now() - lastSnapshotTime) / 60000);
-      const timeAgoStr = formatTimeAgo(diffMins);
-      const tzAbbr = getLocalTimezoneLabel();
-      const lastDate = new Date(lastSnapshotTime);
+        setElemText('lastSnapshotAge',
+          'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+      }
 
-      setElemText('lastUpdatedSubtext',
-        'Last snapshot: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+      if (lastSheetFetchTime) {
+        const diffMins = Math.floor((Date.now() - lastSheetFetchTime) / 60000);
+        const timeAgoStr = formatTimeAgo(diffMins);
+        const tzAbbr = getLocalTimezoneLabel();
+        const lastDate = new Date(lastSheetFetchTime);
+        
+        const elem = document.getElementById('lastSheetFetchAge');
+        if (elem) {
+          elem.style.display = 'block';
+          setElemText('lastSheetFetchAge',
+            'Last sheet fetch: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
+        }
+      }
     }
 
     /**

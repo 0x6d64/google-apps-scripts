@@ -148,7 +148,7 @@
   .card {
     background: var(--surface);
     border-radius: var(--radius);
-    padding: 20px;
+    padding: 16px 20px;
     border: 1px solid var(--border);
     box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
     position: relative;
@@ -337,10 +337,11 @@
 
   .summary-arrow {
     transition: transform 0.2s ease;
+    display: inline-block;
   }
 
   .danger-zone-details[open] .summary-arrow {
-    transform: rotate(180deg);
+    transform: rotate(90deg);
   }
 
   .danger-zone-content {
