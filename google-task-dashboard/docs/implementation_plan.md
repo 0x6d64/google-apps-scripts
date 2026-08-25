@@ -330,7 +330,7 @@ Rationale:
      but lags perceived trend by 0 (center-aligned).
    - Trailing: `avg[i] = mean(data[i - window : i])` — lags by window/2,
      standard in time-series.
-   - Recommendation: **Trailing** (standard; easier to reason about "momentum
+   - Decision: **Trailing** (standard; easier to reason about "momentum
      so far").
 
 2. **How to handle series toggle with rolling average?**
