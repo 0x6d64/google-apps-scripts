@@ -236,6 +236,7 @@
 
     /**
      * Calculates completion throughput velocity over 7-day window.
+     * Sums only positive increments between snapshots to survive purges/deletes.
      * Uses actual elapsed time between oldest and newest snapshots.
      * @param {Array<Array<any>>} rows
      */
@@ -245,17 +246,19 @@
       const recentRows = rows.filter(r => new Date(r[0]).getTime() >= sevenDaysAgo);
 
       if (recentRows.length >= 2) {
-        const oldestCompleted = recentRows[0][2];
-        const newestCompleted = recentRows[recentRows.length - 1][2];
-        const diff = Math.max(0, newestCompleted - oldestCompleted);
+        // Sum only positive increments; ignore drops from purges/deletes
+        let totalCompletions = 0;
+        for (let i = 1; i < recentRows.length; i++) {
+          const delta = recentRows[i][2] - recentRows[i - 1][2];
+          if (delta > 0) totalCompletions += delta;
+        }
 
         // Actual elapsed time between oldest and newest snapshot
         const oldestTime = new Date(recentRows[0][0]).getTime();
         const newestTime = new Date(recentRows[recentRows.length - 1][0]).getTime();
-        const elapsedMs = Math.max(1, newestTime - oldestTime);
-        const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
+        const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
 
-        const ratePerDay = (diff / elapsedDays).toFixed(1);
+        const ratePerDay = (totalCompletions / elapsedDays).toFixed(1);
         setElemText('kpiVelocitySubtext', '7d Velocity: ~' + ratePerDay + '/day');
       } else {
         setElemText('kpiVelocitySubtext', '7d Velocity: Calculating...');
