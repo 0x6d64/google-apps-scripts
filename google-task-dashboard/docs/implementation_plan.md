@@ -164,14 +164,8 @@ The following implementation items remain from the requirements document.
 | 5    | Graph downsampling / smoothing                   | JavaScript.html             | M      | ⏳ Ready |
 | 6    | Configurable sheet-data auto-fetch               | Index.html, JavaScript.html | M      | ⏳ Ready |
 | 7    | 6-month future task filter                       | Code.js, JavaScript.html    | S      | ⏳ Ready |
-| 8    | Rolling average line                             | JavaScript.html             | L      | ⏸️ Hold  |
-
-### Implementation 5 — Graph downsampling / smoothing
-
-**Goal:** Distinguish when the latest task snapshot was created from when the
-dashboard last fetched historical data from the sheet.
-
-**Implementation steps:**
+| 8    | Rolling average line                             | JavaScript.html             | M      | ✅ Ready |
+| 9    | Danger Zone: hourly downsample of last-year data | Index.html, JavaScript.html, Code.js | M | ✅ Ready |
 
 ### Implementation 6 — Configurable sheet-data auto-fetch
 
@@ -253,21 +247,219 @@ calling the Google Tasks API.
 
 ### Implementation 8 — Rolling average line
 
-**Status:** ON HOLD
+**Status:** DESIGN PHASE (research complete, ready for implementation design)
 
-No implementation is planned yet. Before implementation, define:
+**Goal:** Add a toggle button that overlays rolling average lines on top of
+the existing stacked area chart. Rolling averages should be visually distinct
+and window size should adapt to the selected date range.
 
-- the moving-average window size or configuration mechanism
-- which chart series are eligible
-- whether the line uses the original or downsampled data
-- how the toggle is presented alongside the existing series controls
+**UI approach:**
+
+1. Add a toggle pill or checkbox in the Series control group (alongside
+   On-Time Open, Overdue, Completed, Severity toggles).
+2. Label: "Rolling Average" or "Trend Line".
+3. When toggled ON: overlay rolling average for every currently visible series.
+4. When toggled OFF: hide all rolling average lines.
+5. Visual distinction: dotted line, reduced opacity (e.g., 0.6 alpha), or
+   both. Recommend: **dotted + 60% opacity** to distinguish from raw data
+   while maintaining readability.
+6. Reuse the same color scheme as the underlying series (blue for On-Time
+   Open, red for Overdue, green for Completed, purple for Severity).
+
+**Adaptive window sizing:**
+
+Rolling average window should scale with the selected date range. Research
+on best practices:
+
+**Industry standard: Heuristic binning**
+
+Most charting libraries and analytics platforms use this rule:
+- Window size ≈ `ceil(total_points / 50)` to `ceil(total_points / 100)`
+- This ensures the smoothed line has sufficient granularity to convey trend
+  without over-fitting noise.
+- At 50 points/range, window ≈ 1; at 500 points/range, window ≈ 5–10.
+
+**Alternative: Calendar-aware sizing**
+
+- 3-day range: window = 12 snapshots (= 6 hours if snapshots every 30 min) or 3 snapshots if hourly.
+- 7-day range: window = 12–24 snapshots (≈ 6–12 hours).
+- 14-day range: window = 24–48 snapshots (≈ 12–24 hours).
+- 30-day range: window = 48–96 snapshots (≈ 24–48 hours).
+- All-range: window = 168 snapshots (≈ 1 week).
+
+**Recommendation: Adaptive grid-based window**
+
+Use a simple bucketing rule that works for any snapshot cadence:
+
+```
+windowSize = ceil(dataPoints / 50)  // aim for ~50 buckets in the line
+windowSize = Math.max(2, Math.min(windowSize, 168))  // clamp: min 2, max 168 (1 week)
+```
+
+Rationale:
+- Scales automatically with range selection (3D → 7D → 30D → All).
+- Insensitive to snapshot cadence (whether 5-min, 30-min, 1-hour snapshots).
+- Max clamping (168) prevents over-smoothing on all-time ranges.
+- Min clamping (2) ensures meaningful averaging even on tiny ranges.
+
+**Example:** Your data (25 rows in last 24h):
+- Window = ceil(25 / 50) = 1 → clamped to 2 → rolling average over 2 snapshots.
+- Smooth but retains noise. Acceptable for short ranges.
+
+- 30-day range (~720 rows if 2/hour):
+- Window = ceil(720 / 50) = 15 → rolling average over 15 snapshots.
+- Heavy smoothing, trend clearly visible.
+
+**Implementation approach:**
+
+1. Compute window size dynamically in `renderCharts()` based on currently
+   displayed data points and selected range.
+2. Apply rolling average function to each series (on-time open, overdue,
+   completed, severity).
+3. Use simple moving average (SMA): `avg[i] = sum(data[i:i+window]) / window`.
+   Centered window optional; leading/trailing windows acceptable.
+4. Pass averaged data to chart alongside raw data.
+5. Render averaged data as dotted, 60% opacity lines on top of stacked areas.
+6. Series controls (toggle On-Time Open, etc.) apply to both raw and average
+   simultaneously (no separate toggles per series).
+
+**Open questions to resolve before implementation:**
+
+1. **Centered vs. leading/trailing window?**
+   - Centered: `avg[i] = mean(data[i - window/2 : i + window/2])` — smooth
+     but lags perceived trend by 0 (center-aligned).
+   - Trailing: `avg[i] = mean(data[i - window : i])` — lags by window/2,
+     standard in time-series.
+   - Recommendation: **Trailing** (standard; easier to reason about "momentum
+     so far").
+
+2. **How to handle series toggle with rolling average?**
+   - When user unchecks "On-Time Open," hide both raw and average lines for
+     that series.
+   - Single toggle button controls all series together (no per-series
+     enable/disable for rolling avg).
+
+3. **Label & placement?**
+   - Recommend adding to the Series pill group alongside severity toggle.
+   - Label: "Smooth" or "Rolling Avg" or "Trend Line".
+   - Placement: after Severity toggle (all four are data toggles, rolling avg
+     is a display modifier).
+
+**Acceptance checks:**
+
+- Toggle button appears in Series control group.
+- When ON, rolling average lines overlay all visible series with dotted +
+  60% opacity appearance.
+- When OFF, rolling average lines are hidden.
+- Window size adapts to selected date range (3D, 7D, 14D, 30D, All).
+- Toggling individual series (e.g., unchecking Severity) hides both raw and
+  average lines for that series.
+- Rolling average does not affect KPI values (chart only, no backend changes).
+- On short ranges (e.g., 3D with few snapshots), rolling avg still renders
+  visibly (even if window = 2).
+- Performance is acceptable (averaging is O(n), negligible overhead).
+
+### Implementation 9 — Danger Zone: hourly downsample of last-year data
+
+**Status:** READY FOR IMPLEMENTATION
+
+**Goal:** Add a Danger Zone button that downsamples the last 365 days of
+snapshot rows to a maximum of 1 entry per hour, permanently reducing sheet
+row count for that range.
+
+**Relationship to existing items:** Distinct from item "Prune Old Data
+(>1 year)," which targets rows *older* than 1 year and downsamples to 1
+entry/day. This new button targets the *last* year and downsamples to a
+finer 1 entry/hour resolution.
+
+**Decision: Aggregation approach = Latest**
+
+Keep the last snapshot recorded within each 60-minute window; discard all
+others. This preserves real observed values exactly, removes intra-hour
+erratic corrections/noise, and avoids manufacturing synthetic numbers that
+were never actually observed.
+
+**Decision: Binning strategy = Rolling 60-minute window**
+
+Each snapshot's hour is defined as the 60-minute span ending at that
+snapshot's timestamp. For example, a snapshot at `2026-08-25T14:30:15Z` has
+window `[13:30:15, 14:30:15]`. The latest snapshot within that window is
+kept; all others in the window are discarded.
+
+**Rationale:** This directly implements the stated goal: "remove artifacts
+from erratic corrections during the hour" by operating on actual 60-minute
+spans from each snapshot, not calendar boundaries. Adaptive to your sync
+distribution and independent of clock alignment.
+
+**Implementation approach:**
+
+```
+sort all snapshots in the last 365 days by timestamp (ascending)
+result = []
+for each snapshot S:
+  window_start = S.timestamp - 60 minutes
+  window_end = S.timestamp
+  if no snapshot in result already covers [window_start, window_end]:
+    add S to result
+  else:
+    replace the existing snapshot in that window with S (S is later, so it's the latest)
+return result
+```
+
+Or equivalently (simpler):
+
+```
+sort all snapshots in the last 365 days by timestamp (ascending)
+keep = {}  // map: window_end_timestamp → snapshot
+for each snapshot S:
+  window_end = S.timestamp
+  keep[window_end] = S  // always keep the latest per window_end
+return values(keep)
+```
+
+Note: The second approach assumes one snapshot per unique `timestamp`. If
+multiple snapshots share the exact same timestamp, use the second to break
+ties or dedup first.
+
+**Implementation steps:**
+
+1. Add a button in the Danger Zone titled "Downsample Last Year (1/hour)" or
+   similar, with btn-secondary styling (like other housekeeping actions).
+2. Button calls a backend RPC handler (e.g., `downsampleLastYearToHourly()`).
+3. Handler identifies all rows with `timestamp >= now - 365 days`.
+4. Handler applies the rolling 60-minute binning logic above.
+5. Handler deletes all non-survivor rows from the sheet (irreversible).
+6. Handler returns success/failure and count of rows deleted.
+7. Frontend shows a confirmation dialog before calling (standard for Danger Zone).
+8. On success, notify user with row-count feedback (e.g., "Deleted 2847 rows,
+   kept 8760").
+
+**Danger Zone placement:** Insert after "Prune Old Data (>1 year)" since
+both are permanent data-reduction actions. Order from highest to lowest
+destructive impact remains:
+1. Purge Completed Tasks Across All Lists
+2. Delete Old Done Tasks (>8w)
+3. Downsample Last Year (1/hour)  ← NEW
+4. Prune Old Data (>1 year)
+
+**Acceptance checks:**
+
+- After running, the last 365 days contain at most 1 row per rolling
+  60-minute window.
+- Rows older than 365 days are unaffected by this action.
+- Latest snapshot in each 60-minute window is retained; all others deleted.
+- The action requires the same confirmation-dialog flow as other Danger Zone actions.
+- User receives feedback on how many rows were deleted.
+- Existing chart rendering and KPI calculations continue to work against the
+  reduced dataset.
 
 ## Recommended Implementation Order
 
 1. **Graph downsampling / smoothing** (improves chart UX for long ranges)
 2. **Configurable sheet-data auto-fetch** (establishes background refresh behavior)
 3. **6-month future task filter** (independent backend filtering)
-4. **Rolling average line** (after UX refinement)
+4. **Danger Zone: hourly downsample of last-year data** (ready; insert after Prune Old Data in Danger Zone)
+5. **Rolling average line** (non-destructive, chart-only enhancement)
 
 ## Testing Checklist for Remaining Items
 
@@ -298,9 +490,12 @@ No implementation is planned yet. Before implementation, define:
 
 ## File Deliverables for Next Iteration
 
-1. **Index.html** — auto-fetch controls and UI note for future-task filter.
-2. **JavaScript.html** — chart downsampling logic and background refresh lifecycle.
+1. **Index.html** — auto-fetch controls, UI note for future-task filter, and
+   Danger Zone button for hourly downsample (pending approach decision).
+2. **JavaScript.html** — chart downsampling logic, background refresh
+   lifecycle, and confirmation handler for hourly downsample.
 3. **Styles.html** — no changes expected.
-4. **Code.js** — 6-month future-task filtering during ingestion.
+4. **Code.js** — 6-month future-task filtering during ingestion, and hourly
+   downsample backend logic (pending approach decision).
 
 All previously completed items remain unchanged.
