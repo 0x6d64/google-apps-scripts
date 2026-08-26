@@ -448,10 +448,14 @@
         estCard.style.display = 'block';
         const label = document.getElementById('backlogEstimateValue');
         const note = document.getElementById('backlogEstimateNote');
-        if (label) label.textContent = estimate;
+        if (label) {
+          label.textContent = estimate;
+          // Use a smaller font for text-based values so they fit on one line
+          label.classList.toggle('value-compact', isNaN(Number(estimate)));
+        }
         if (note) {
           if (estimate === 'Cannot estimate') {
-            note.textContent = 'Backlog stable or growing';
+            note.textContent = 'Adding ~' + additionRate.toFixed(1) + '/day vs completing ~' + completionRate.toFixed(1) + '/day';
           } else {
             const rangeLabel = activeRangeDays === 'all' ? 'all time' : activeRangeDays + ' days';
             note.textContent = 'Based on rates over past ' + rangeLabel;
