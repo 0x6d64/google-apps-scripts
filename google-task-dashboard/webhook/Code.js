@@ -91,6 +91,9 @@ function getSpreadsheetUrl() {
  */
 function ingestTaskMetrics() {
   const now = new Date();
+  const sixMonthsCutoff = new Date(now);
+  sixMonthsCutoff.setMonth(sixMonthsCutoff.getMonth() + 6);
+
   let taskListsResult;
   try {
     taskListsResult = Tasks.Tasklists.list();
@@ -135,15 +138,24 @@ function ingestTaskMetrics() {
         if (task.status === 'completed') {
           totalCompleted++;
         } else if (task.status === 'needsAction') {
-          totalOpen++;
-
-          if (task.due) {
+          // Include open tasks without due date, or with due date within 6-month window
+          if (!task.due) {
+            // No due date: always count as open
+            totalOpen++;
+          } else {
             const dueDate = new Date(task.due);
-            if (!isNaN(dueDate.getTime()) && dueDate < now) {
-              totalOverdue++;
-              const diffMs = now.getTime() - dueDate.getTime();
-              const daysOverdue = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-              totalOverdueSeverity += Math.sqrt(daysOverdue);
+            if (!isNaN(dueDate.getTime())) {
+              // Exclude tasks due more than 6 months in the future
+              if (dueDate <= sixMonthsCutoff) {
+                totalOpen++;
+                // Calculate overdue only for tasks with due dates in the past
+                if (dueDate < now) {
+                  totalOverdue++;
+                  const diffMs = now.getTime() - dueDate.getTime();
+                  const daysOverdue = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+                  totalOverdueSeverity += Math.sqrt(daysOverdue);
+                }
+              }
             }
           }
         }
@@ -490,6 +502,164 @@ function pruneDataOlderThan1Year() {
       totalBefore: 0,
       totalAfter: 0,
       totalPruned: 0,
+      percentageRemoved: 0,
+      durationMs: Date.now() - startTime
+    };
+  } finally {
+    releaseSyncLock();
+  }
+}
+
+/**
+ * Downsamples the last 365 days of snapshot rows to at most 1 entry per
+ * rolling 60-minute window, keeping only the latest snapshot in each window.
+ * Rows older than 365 days are left untouched (handled separately by
+ * pruneDataOlderThan1Year).
+ */
+function downsampleLastYearToHourly() {
+  const startTime = Date.now();
+  acquireSyncLock();
+
+  try {
+    const sheet = getOrCreateSheet();
+    const lastRow = sheet.getLastRow();
+    const totalDataRowsBefore = Math.max(0, lastRow - 1);
+
+    if (totalDataRowsBefore < 10) {
+      return {
+        success: false,
+        error: 'Insufficient rows to downsample (only ' + totalDataRowsBefore + ' total). No action taken.',
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalRemoved: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    const cutoffTimestamp = Date.now() - (365 * 24 * 60 * 60 * 1000);
+    const rangeValues = sheet.getRange(2, 1, totalDataRowsBefore, 1).getValues();
+
+    // Build list of {rowNumber, timestampMs} for rows within the last 365 days
+    const candidateRows = [];
+    for (let i = 0; i < rangeValues.length; i++) {
+      const rawDate = rangeValues[i][0];
+      if (!rawDate) continue;
+
+      const dateObj = new Date(rawDate);
+      if (isNaN(dateObj.getTime())) continue;
+
+      const rowNumber = i + 2; // 1-based indexing + header offset
+      const timestampMs = dateObj.getTime();
+
+      if (timestampMs < cutoffTimestamp) {
+        // Older than 1 year; not in scope for this action
+        continue;
+      }
+
+      candidateRows.push({ rowNumber: rowNumber, timestampMs: timestampMs });
+    }
+
+    if (candidateRows.length === 0) {
+      return {
+        success: true,
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalRemoved: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime,
+        message: 'No snapshots found within the last 365 days. No action taken.'
+      };
+    }
+
+    // Sort ascending by timestamp (sheet rows should already be in order, but be defensive)
+    candidateRows.sort((a, b) => a.timestampMs - b.timestampMs);
+
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const rowsToDelete = [];
+    let windowAnchorMs = null; // end-timestamp of the currently open 60-minute window
+    let lastKeptRowNumber = null;
+
+    for (let i = 0; i < candidateRows.length; i++) {
+      const current = candidateRows[i];
+
+      if (windowAnchorMs === null) {
+        // First row in scope: starts a new window
+        windowAnchorMs = current.timestampMs;
+        lastKeptRowNumber = current.rowNumber;
+        continue;
+      }
+
+      if (current.timestampMs - windowAnchorMs < ONE_HOUR_MS) {
+        // Falls within the rolling 60-minute window of the last kept snapshot;
+        // this snapshot is newer, so it replaces the previously kept one.
+        rowsToDelete.push(lastKeptRowNumber);
+        lastKeptRowNumber = current.rowNumber;
+        windowAnchorMs = current.timestampMs;
+      } else {
+        // Outside the window; keep this row and start a new window from it.
+        lastKeptRowNumber = current.rowNumber;
+        windowAnchorMs = current.timestampMs;
+      }
+    }
+
+    Logger.log('[DOWNSAMPLE] Candidate rows: ' + candidateRows.length + ', Marked for deletion: ' + rowsToDelete.length);
+
+    if (rowsToDelete.length === 0) {
+      return {
+        success: true,
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalRemoved: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime,
+        message: 'Last year of data is already at or below 1 entry per hour. No action taken.'
+      };
+    }
+
+    // Safety threshold: abort if more than 80% of total rows would be removed
+    if ((rowsToDelete.length / totalDataRowsBefore) > 0.80) {
+      return {
+        success: false,
+        error: 'Downsampling would remove ' + ((rowsToDelete.length / totalDataRowsBefore) * 100).toFixed(1) + '% of data. Aborting as safety measure. Check data integrity.',
+        totalBefore: totalDataRowsBefore,
+        totalAfter: totalDataRowsBefore,
+        totalRemoved: 0,
+        percentageRemoved: 0,
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    // Batch delete rows in reverse order from bottom to top to avoid index shifting
+    rowsToDelete.sort((a, b) => b - a);
+    for (let i = 0; i < rowsToDelete.length; i++) {
+      sheet.deleteRow(rowsToDelete[i]);
+    }
+
+    const totalDataRowsAfter = Math.max(0, sheet.getLastRow() - 1);
+    const totalRemoved = totalDataRowsBefore - totalDataRowsAfter;
+    const percentageRemoved = totalDataRowsBefore > 0 ? Number(((totalRemoved / totalDataRowsBefore) * 100).toFixed(1)) : 0;
+    const durationMs = Date.now() - startTime;
+
+    Logger.log('[DOWNSAMPLE] Finished in ' + durationMs + 'ms. Rows remaining: ' + totalDataRowsAfter);
+
+    return {
+      success: true,
+      totalBefore: totalDataRowsBefore,
+      totalAfter: totalDataRowsAfter,
+      totalRemoved: totalRemoved,
+      percentageRemoved: percentageRemoved,
+      durationMs: durationMs,
+      message: 'Downsampled ' + totalRemoved + ' rows. Kept ' + totalDataRowsAfter + '.'
+    };
+  } catch (err) {
+    Logger.log('[DOWNSAMPLE] Error: ' + err);
+    return {
+      success: false,
+      error: (err && (err.message || err.toString())) || 'Unknown downsampling error',
+      totalBefore: 0,
+      totalAfter: 0,
+      totalRemoved: 0,
       percentageRemoved: 0,
       durationMs: Date.now() - startTime
     };

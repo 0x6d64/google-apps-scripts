@@ -10,6 +10,9 @@
     let stalenessUpdateTimer = null;
     let lastSnapshotTime = null;
     let lastSheetFetchTime = null;
+    let autoFetchEnabled = true;
+    let autoFetchIntervalMs = 30 * 60 * 1000; // Default 30 minutes
+    let autoFetchTimer = null;
 
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
@@ -30,6 +33,11 @@
       google.charts.setOnLoadCallback(fetchData);
       setupResizeHandler();
       setupStalenessUpdateTimer();
+      setupAutoFetch();
+      setupPageVisibilityHandler();
+      if (autoFetchEnabled) {
+        startAutoFetch();
+      }
     }
 
     /**
@@ -53,6 +61,84 @@
           updateStalenessDisplay();
         }
       }, 10 * 1000); // Update every 10 seconds
+    }
+
+    /**
+     * Sets up auto-fetch background polling to refresh sheet data periodically.
+     */
+    function setupAutoFetch() {
+      // Check if toggle exists and is enabled
+      const autoFetchCheckbox = document.getElementById('toggleAutoFetch');
+      if (autoFetchCheckbox) {
+        autoFetchCheckbox.addEventListener('change', (e) => {
+          autoFetchEnabled = e.target.checked;
+          if (autoFetchEnabled) {
+            startAutoFetch();
+          } else {
+            stopAutoFetch();
+          }
+        });
+      }
+
+      // Check if interval selector exists
+      const intervalSelect = document.getElementById('autoFetchInterval');
+      if (intervalSelect) {
+        intervalSelect.addEventListener('change', (e) => {
+          autoFetchIntervalMs = Number(e.target.value) * 60 * 1000; // Convert minutes to ms
+          // Restart timer with new interval if enabled
+          if (autoFetchEnabled) {
+            stopAutoFetch();
+            startAutoFetch();
+          }
+        });
+      }
+    }
+
+    /**
+     * Starts the background auto-fetch timer.
+     */
+    function startAutoFetch() {
+      if (autoFetchTimer) return; // Already running
+      autoFetchTimer = setInterval(performAutoFetch, autoFetchIntervalMs);
+    }
+
+    /**
+     * Stops the background auto-fetch timer.
+     */
+    function stopAutoFetch() {
+      if (autoFetchTimer) {
+        clearInterval(autoFetchTimer);
+        autoFetchTimer = null;
+      }
+    }
+
+    /**
+     * Performs a background data refresh from sheet (no Tasks API call).
+     */
+    function performAutoFetch() {
+      // Silently fetch data; only show errors
+      google.script.run.withFailureHandler((error) => {
+        console.error('Auto-fetch error:', error);
+      }).getDashboardData();
+    }
+
+    /**
+     * Sets up Page Visibility API to pause/resume auto-fetch when tab is hidden/visible.
+     */
+    function setupPageVisibilityHandler() {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          // Tab is hidden: pause auto-fetch
+          if (autoFetchEnabled) {
+            stopAutoFetch();
+          }
+        } else {
+          // Tab is visible: resume auto-fetch
+          if (autoFetchEnabled) {
+            startAutoFetch();
+          }
+        }
+      });
     }
 
     /**
@@ -182,7 +268,7 @@
       setElemText('kpiOpenSubtext', onTime + ' on-time + ' + overdue + ' overdue');
       setElemText('kpiCompleted', completed);
       setElemText('kpiOverdue', overdue);
-      setElemText('kpiSeverity', severity);
+      setElemText('kpiSeverity', severity.toFixed(1));
 
       const lastDate = new Date(latest[0]);
       if (!isNaN(lastDate.getTime())) {
@@ -191,6 +277,7 @@
       }
 
       calculateVelocity(rows);
+      updateBacklogEstimate(rows);
     }
 
     /**
@@ -230,8 +317,143 @@
      */
     function formatTimeAgo(minutes) {
       if (minutes < 1) return 'Just now';
-      if (minutes < 60) return minutes + ' min ago';
-      return Math.floor(minutes / 60) + ' hr ago';
+      if (minutes < 60) return Math.floor(minutes) + ' min ago';
+      const hours = minutes / 60;
+      if (hours < 24) return hours.toFixed(1) + ' hr ago';
+      return Math.floor(hours / 24) + ' day' + (hours >= 48 ? 's' : '') + ' ago';
+    }
+
+    /**
+     * Calculates task addition rate over the selected historical window.
+     * Addition rate = (open_start - open_end + completed_in_period) / days_elapsed
+     * @param {Array<Array<any>>} rows - All snapshot rows
+     * @param {number|string} rangeDays - Selected range (3, 7, 14, 30, or 'all')
+     * @return {number} - Tasks added per day
+     */
+    function calculateAdditionRate(rows, rangeDays) {
+      if (!rows || rows.length < 2) return 0;
+
+      const now = Date.now();
+      const cutoff = rangeDays === 'all'
+        ? null
+        : new Date(now - (Number(rangeDays) || 30) * 24 * 60 * 60 * 1000);
+
+      const windowRows = rows.filter(r => {
+        if (!cutoff) return true;
+        const t = new Date(r[0]).getTime();
+        return t >= cutoff.getTime();
+      });
+
+      if (windowRows.length < 2) return 0;
+
+      const oldestOpen = typeof windowRows[0][1] === 'number' ? windowRows[0][1] : 0;
+      const newestOpen = typeof windowRows[windowRows.length - 1][1] === 'number' ? windowRows[windowRows.length - 1][1] : 0;
+      const completedInPeriod = calculateCompletionsInWindow(windowRows);
+
+      const oldestTime = new Date(windowRows[0][0]).getTime();
+      const newestTime = new Date(windowRows[windowRows.length - 1][0]).getTime();
+      const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+
+      // Addition rate = (open_start - open_end + completed) / days
+      const additionRate = (oldestOpen - newestOpen + completedInPeriod) / elapsedDays;
+      return Math.max(0, additionRate);
+    }
+
+    /**
+     * Sums positive completion deltas in a window (ignores purges/deletes).
+     * @param {Array<Array<any>>} windowRows - Snapshot rows in the window
+     * @return {number} - Total completions
+     */
+    function calculateCompletionsInWindow(windowRows) {
+      let total = 0;
+      for (let i = 1; i < windowRows.length; i++) {
+        const delta = windowRows[i][2] - windowRows[i - 1][2];
+        if (delta > 0) total += delta;
+      }
+      return total;
+    }
+
+    /**
+     * Calculates completion rate over the selected historical window.
+     * @param {Array<Array<any>>} rows - All snapshot rows
+     * @param {number|string} rangeDays - Selected range (3, 7, 14, 30, or 'all')
+     * @return {number} - Tasks completed per day
+     */
+    function calculateCompletionRate(rows, rangeDays) {
+      if (!rows || rows.length < 2) return 0;
+
+      const now = Date.now();
+      const cutoff = rangeDays === 'all'
+        ? null
+        : new Date(now - (Number(rangeDays) || 30) * 24 * 60 * 60 * 1000);
+
+      const windowRows = rows.filter(r => {
+        if (!cutoff) return true;
+        const t = new Date(r[0]).getTime();
+        return t >= cutoff.getTime();
+      });
+
+      if (windowRows.length < 2) return 0;
+
+      const completions = calculateCompletionsInWindow(windowRows);
+      const oldestTime = new Date(windowRows[0][0]).getTime();
+      const newestTime = new Date(windowRows[windowRows.length - 1][0]).getTime();
+      const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+
+      return completions / elapsedDays;
+    }
+
+    /**
+     * Calculates estimated days to backlog completion.
+     * @param {number} currentOpen - Current open task count
+     * @param {number} completionRate - Tasks completed per day
+     * @param {number} additionRate - Tasks added per day
+     * @return {string|number} - Days to completion, "Cannot estimate", or "∞"
+     */
+    function calculateDaysToCompletion(currentOpen, completionRate, additionRate) {
+      if (currentOpen <= 0) return '0';
+      if (completionRate <= additionRate) return 'Cannot estimate';
+
+      const netRate = completionRate - additionRate;
+      const days = currentOpen / netRate;
+      if (!isFinite(days) || days < 0) return 'Cannot estimate';
+
+      // Return as integer if >= 1 day, else 1 decimal place
+      if (days >= 1) return Math.round(days).toString();
+      return days.toFixed(1);
+    }
+
+    /**
+     * Updates backlog completion estimate in the UI.
+     * Called from updateKPIsAndStaleness after calculating completion rate.
+     */
+    function updateBacklogEstimate(rows) {
+      const estCard = document.getElementById('backlogEstimateCard');
+      if (!estCard) return;
+
+      if (!rows || rows.length === 0) {
+        estCard.style.display = 'none';
+        return;
+      }
+
+      const currentOpen = typeof rows[rows.length - 1][1] === 'number' ? rows[rows.length - 1][1] : 0;
+      const completionRate = calculateCompletionRate(rows, activeRangeDays);
+      const additionRate = calculateAdditionRate(rows, activeRangeDays);
+      const estimate = calculateDaysToCompletion(currentOpen, completionRate, additionRate);
+
+      // Only show if we have a valid estimate or "Cannot estimate"
+      if (estimate === '0' || (typeof estimate === 'string' && estimate.includes('Cannot'))) {
+        estCard.style.display = 'none';
+      } else {
+        estCard.style.display = 'block';
+        const label = document.getElementById('backlogEstimateValue');
+        const note = document.getElementById('backlogEstimateNote');
+        if (label) label.textContent = estimate;
+        if (note) {
+          const rangeLabel = activeRangeDays === 'all' ? 'all time' : activeRangeDays + ' days';
+          note.textContent = 'Based on rates over past ' + rangeLabel;
+        }
+      }
     }
 
     /**
@@ -301,6 +523,69 @@
     }
 
     /**
+     * Downsamples data to reduce rendered points while preserving trend.
+     * Uses binning: groups consecutive rows into buckets and keeps the latest in each bucket.
+     * @param {Array<Array<any>>} rows - Array of snapshot rows [timestamp, open, completed, overdue, severity]
+     * @param {number} targetBuckets - Target number of buckets (default 50)
+     * @returns {Array<Array<any>>} - Downsampled rows
+     */
+    function downsampleData(rows, targetBuckets = 50) {
+      if (rows.length <= targetBuckets) return rows;
+
+      const bucketSize = Math.ceil(rows.length / targetBuckets);
+      const downsampled = [];
+
+      for (let i = 0; i < rows.length; i += bucketSize) {
+        const bucket = rows.slice(i, i + bucketSize);
+        // Keep the latest (last) row in each bucket
+        downsampled.push(bucket[bucket.length - 1]);
+      }
+
+      return downsampled;
+    }
+
+    /**
+     * Calculates rolling average for a single data column.
+     * Uses trailing window: avg[i] = mean(data[i-window:i])
+     * @param {Array<number>} data - Array of numeric values
+     * @param {number} windowSize - Window size for averaging
+     * @returns {Array<number>} - Averaged values (same length as input)
+     */
+    function calculateRollingAverage(data, windowSize) {
+      const result = [];
+      for (let i = 0; i < data.length; i++) {
+        const start = Math.max(0, i - windowSize + 1);
+        const end = i + 1;
+        const window = data.slice(start, end);
+        const avg = window.reduce((sum, val) => sum + val, 0) / window.length;
+        result.push(avg);
+      }
+      return result;
+    }
+
+    /**
+     * Downsamples data to reduce rendered points while preserving trend.
+     * Uses binning: groups consecutive rows into buckets and keeps the latest in each bucket.
+     * @param {Array<Array<any>>} rows - Array of snapshot rows [timestamp, open, completed, overdue, severity]
+     * @param {number} targetBuckets - Target number of buckets (default 50)
+     * @returns {Array<Array<any>>} - Downsampled rows
+     */
+    function downsampleData(rows, targetBuckets = 50) {
+      if (rows.length <= targetBuckets) return rows;
+
+      const bucketSize = Math.ceil(rows.length / targetBuckets);
+      const downsampled = [];
+
+      for (let i = 0; i < rows.length; i += bucketSize) {
+        const bucket = rows.slice(i, i + bucketSize);
+        // Keep the latest (last) row in each bucket
+        downsampled.push(bucket[bucket.length - 1]);
+      }
+
+      return downsampled;
+    }
+
+    /**
      * Builds and draws the Stacked Line/Area Chart with Overdue Severity Line Overlay.
      */
     function drawStackedLineComboChart() {
@@ -322,6 +607,7 @@
       const showOverdue = isChecked('toggleOverdue');
       const showCompleted = isChecked('toggleCompleted');
       const showSeverity = isChecked('toggleSeverity');
+      const showRollingAvg = isChecked('toggleRollingAvg');
 
       // 1. Stacked Lines/Areas on Axis 0 (mutually exclusive segments)
       if (showOpen) {
@@ -367,6 +653,68 @@
         };
       }
 
+      // 3. Rolling Average Lines (if enabled)
+      if (showRollingAvg && visibleCols.length > 1) {
+        // Compute window size based on data points
+        const numRows = dataTable.getNumberOfRows();
+        let windowSize = Math.ceil(numRows / 50);
+        windowSize = Math.max(2, Math.min(windowSize, 168)); // Clamp: min 2, max 168
+
+        // Add rolling average columns for each visible series
+        const avgCols = [];
+        for (let i = 1; i < visibleCols.length; i++) {
+          avgCols.push(visibleCols[i]);
+        }
+
+        // Extract raw data for each series and calculate rolling averages
+        const seriesData = {};
+        for (let colIdx of avgCols) {
+          const rawValues = [];
+          for (let row = 0; row < numRows; row++) {
+            const val = dataTable.getValue(row, colIdx);
+            rawValues.push(typeof val === 'number' ? val : 0);
+          }
+          seriesData[colIdx] = calculateRollingAverage(rawValues, windowSize);
+        }
+
+        // Add rolling average columns to the data table
+        const colCount = dataTable.getNumberOfColumns();
+        const avgColMap = {}; // Map original col index to new avg col index
+
+        for (let colIdx of avgCols) {
+          dataTable.addColumn('number', 'Avg ' + dataTable.getColumnLabel(colIdx));
+          avgColMap[colIdx] = colCount + avgCols.indexOf(colIdx);
+
+          // Populate the rolling average column
+          for (let row = 0; row < numRows; row++) {
+            dataTable.setValue(row, dataTable.getNumberOfColumns() - 1, seriesData[colIdx][row]);
+          }
+        }
+
+        // Add rolling average columns to visible columns and configure their styling
+        for (let colIdx of avgCols) {
+          const avgColIdx = avgColMap[colIdx];
+          visibleCols.push(avgColIdx);
+
+          // Determine color based on original series
+          let color = SERIES_COLORS.onTimeOpen;
+          let axisIdx = 0;
+          if (colIdx === 2) color = SERIES_COLORS.overdue;
+          else if (colIdx === 3) color = SERIES_COLORS.completed;
+          else if (colIdx === 4) { color = SERIES_COLORS.severity; axisIdx = 1; }
+
+          seriesConfig[activeSeriesIdx++] = {
+            type: colIdx === 4 ? 'line' : 'line', // All rolling averages as lines
+            targetAxisIndex: axisIdx,
+            color: color,
+            lineWidth: 2,
+            lineDashStyle: [5, 5], // Dotted line
+            pointSize: 0,
+            opacity: 0.6
+          };
+        }
+      }
+
       if (visibleCols.length === 1) {
         chartContainer.innerHTML = '<div class="loading-spinner">Select at least one metric series above to render chart.</div>';
         return;
@@ -378,6 +726,16 @@
       }
 
       dataView.setColumns(visibleCols);
+
+      // Format severity column (index 4) to 1 decimal place
+      const severityFormatter = new google.visualization.NumberFormat('#.0');
+      if (visibleCols.includes(4)) {
+        // Find the position of column 4 in visibleCols
+        const severityIdx = visibleCols.indexOf(4);
+        if (severityIdx !== -1) {
+          severityFormatter.format(dataView, severityIdx);
+        }
+      }
 
       const tzLabel = getLocalTimezoneLabel();
       const options = {
@@ -444,7 +802,9 @@
         validRows.push([dateObj, onTimeOpen, overdue, completed, severity]);
       }
 
-      dataTable.addRows(validRows);
+      // Apply downsampling for large datasets
+      const downsampledRows = downsampleData(validRows);
+      dataTable.addRows(downsampledRows);
       return dataTable;
     }
 
@@ -623,6 +983,70 @@
         .pruneDataOlderThan1Year();
     }
 
+    function handleDownsampleLastYear() {
+      const confirmed = confirm(
+        '⚠️ DOWNSAMPLE LAST YEAR TO 1/HOUR\n\n' +
+        'This will reduce snapshots from the last 365 days to at most 1 entry per rolling 60-minute window, keeping only the latest snapshot in each window.\n\n' +
+        'This permanently removes intra-hour data and cannot be undone.\n\n' +
+        'Data older than 1 year is not affected by this action.\n\n' +
+        'Continue?'
+      );
+      if (!confirmed) return;
+
+      setButtonsDisabled(true);
+      showStatus('Downsampling last year of snapshots to 1 per hour...', 'info');
+
+      google.script.run
+        .withSuccessHandler((result) => {
+          setButtonsDisabled(false);
+          if (!result || !result.success) {
+            const errMsg = (result && result.error) || 'Unknown error';
+            showStatus('Downsample failed: ' + errMsg, 'error');
+            showNotification(`Downsample failed\n${errMsg}`, '❌', 'error', 5000);
+            return;
+          }
+
+          showDownsampleResultModal(result);
+          showStatus('Downsampling complete. Refreshing dashboard...', 'success');
+          showNotification(`Removed ${result.totalRemoved} rows\nReduced to 1/hour`, '📉', 'success', 4000);
+          fetchData();
+        })
+        .withFailureHandler((err) => {
+          setButtonsDisabled(false);
+          onDataError(err);
+        })
+        .downsampleLastYearToHourly();
+    }
+
+    /**
+     * Displays a clean formatted result modal with downsampling statistics.
+     * @param {Object} result
+     */
+    function showDownsampleResultModal(result) {
+      const existing = document.getElementById('downsampleResultModal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'downsampleResultModal';
+      modal.className = 'modal-overlay';
+      modal.innerHTML = `
+        <div class="modal-card">
+          <h3>✅ Downsampling Complete</h3>
+          <table class="prune-stats-table">
+            <tr><td>Total rows before:</td><td>${result.totalBefore}</td></tr>
+            <tr><td>Rows removed:</td><td>${result.totalRemoved}</td></tr>
+            <tr><td>Rows remaining:</td><td>${result.totalAfter}</td></tr>
+            <tr><td>Percentage removed:</td><td>${Number(result.percentageRemoved || 0).toFixed(1)}%</td></tr>
+            <tr><td>Execution time:</td><td>${result.durationMs}ms</td></tr>
+          </table>
+          <div class="modal-footer">
+            <button class="btn btn-primary" onclick="document.getElementById('downsampleResultModal').remove()">Close</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
     /**
      * Displays a clean formatted result modal with pruning statistics.
      * @param {Object} result
@@ -679,11 +1103,13 @@
       const btnReload = document.getElementById('btnReloadData');
       const btnDeleteOld = document.getElementById('btnDeleteOldCompleted');
       const btnClear = document.getElementById('btnSyncClear');
+      const btnDownsample = document.getElementById('btnDownsampleLastYear');
       const btnPrune = document.getElementById('btnPruneOldData');
       if (btnSync) btnSync.disabled = disabled;
       if (btnReload) btnReload.disabled = disabled;
       if (btnDeleteOld) btnDeleteOld.disabled = disabled;
       if (btnClear) btnClear.disabled = disabled;
+      if (btnDownsample) btnDownsample.disabled = disabled;
       if (btnPrune) btnPrune.disabled = disabled;
     }
 
@@ -709,6 +1135,7 @@
       handleSyncNow: handleSyncNow,
       handleDeleteOldCompletedTasks: handleDeleteOldCompletedTasks,
       handleSyncAndClear: handleSyncAndClear,
+      handleDownsampleLastYear: handleDownsampleLastYear,
       handlePruneOldData: handlePruneOldData,
       handleTriggerToggle: handleTriggerToggle
     };

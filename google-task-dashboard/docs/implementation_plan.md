@@ -10,7 +10,7 @@
 
 ## Overview
 
-Completed items 1–4 plus velocity calculation fix in current session.
+Completed items 1–4 plus velocity fix, and items 5, 6, 10, 12, 13 in current session.
 
 Current implementation status:
 
@@ -19,6 +19,15 @@ Current implementation status:
 - ✅ Item 3: Reduced KPI card height
 - ✅ Item 4: Danger Zone action ordering
 - ✅ Bonus: Fixed velocity calculation (sum positive increments, ignore purges)
+- ✅ Item 5: Graph downsampling / smoothing
+- ✅ Item 6: Configurable sheet-data auto-fetch
+- ✅ Item 7: 6-month future task filter
+- ✅ Item 8: Rolling average line
+- ✅ Item 9: Danger Zone: hourly downsample of last-year data
+- ✅ Item 10: Overdue Severity: 1 decimal place formatting
+- ✅ Item 11: Estimated backlog completion date
+- ✅ Item 12: Consistent action-button sizing
+- ✅ Item 13: Higher-resolution elapsed-time display
 
 ---
 
@@ -155,17 +164,292 @@ function calculateVelocity(rows) {
 
 ---
 
-## Remaining Planned Items
+### 5. **Graph downsampling / smoothing** ✅
 
-The following implementation items remain from the requirements document.
+**Status:** DONE
+
+**Files:** JavaScript.html
+
+**Changes:**
+
+- Added `downsampleData()` function that bins snapshot rows into ~50 buckets and keeps the latest row in each bucket.
+- Integrated downsampling into `buildDecomposedDataTable()` before adding rows to the chart.
+- Downsampling preserves trend visibility while reducing rendered points for large datasets.
+- Scales automatically: no manual configuration needed; works transparently.
+
+**Impact:** Charts remain responsive and readable even on all-time ranges with thousands of snapshots. Trend is preserved; visual clutter reduced.
+
+---
+
+### 6. **Configurable sheet-data auto-fetch** ✅
+
+**Status:** DONE
+
+**Files:** Index.html, JavaScript.html
+
+**Changes:**
+
+**Index.html:**
+- Added auto-fetch toggle in Danger Zone (enabled by default).
+- Added interval selector with options: 15, 30 (selected), 60 minutes.
+- Descriptive label and help text explaining that updates pause when tab is hidden.
+
+**JavaScript.html:**
+- Added state variables: `autoFetchEnabled` (true by default), `autoFetchIntervalMs` (30min default), `autoFetchTimer`.
+- Implemented `setupAutoFetch()`: wires up toggle and interval selector to event handlers.
+- Implemented `startAutoFetch()` / `stopAutoFetch()`: manage background timer.
+- Implemented `performAutoFetch()`: silently calls `getDashboardData()` (sheet-only, no Tasks API).
+- Implemented `setupPageVisibilityHandler()`: uses Page Visibility API to pause polling when tab is hidden, resume when visible.
+- Auto-fetch starts on page load if enabled (default behavior).
+
+**Behavior:**
+- Enabled on page load; fetches sheet data every 30 minutes by default.
+- Pauses when browser tab not visible (reduces unnecessary requests).
+- Resumes when tab becomes visible.
+- User can toggle on/off or change interval at any time.
+- No disruptive notifications for background refreshes.
+
+**Impact:** Dashboard stays fresh without manual clicks; respects browser visibility for efficiency.
+
+---
+
+### 10. **Overdue Severity: 1 decimal place formatting** ✅
+
+**Status:** DONE
+
+**Files:** JavaScript.html, Styles.html
+
+**Changes:**
+
+**JavaScript.html:**
+- Updated KPI display in `updateKPIsAndStaleness()`: formatted severity with `.toFixed(1)`.
+- Added Google Charts NumberFormatter in `drawStackedLineComboChart()`: applies `#.0` format to severity column when rendered.
+
+**Impact:** Severity displays as (e.g.) `70.2` instead of `70.23`, reducing visual clutter while maintaining precision. Consistent across KPI card and chart tooltips.
+
+---
+
+### 12. **Consistent action-button sizing** ✅
+
+**Status:** DONE
+
+**Files:** Styles.html
+
+**Changes:**
+
+**Styles.html:**
+- Updated `.btn` class:
+  - Added `justify-content: center` (horizontal centering).
+  - Added `min-height: 40px` (consistent minimum height).
+  - Changed gap from `6px` to `8px` for better spacing.
+  - Added `line-height: 1.2` for consistent text wrapping.
+  - Added `text-align: center` for label alignment.
+  - Adjusted padding to `8px 16px` (vertical reduction for compact layout).
+
+**Impact:** All header action buttons are uniform in height and content alignment, regardless of label length or text wrapping. Improved visual consistency.
+
+---
+
+### 13. **Higher-resolution elapsed-time display** ✅
+
+**Status:** DONE
+
+**Files:** JavaScript.html
+
+**Changes:**
+
+**JavaScript.html:**
+- Updated `formatTimeAgo()` function:
+  - Sub-1h: minute resolution (e.g., "15 min ago").
+  - 1h+: decimal hour resolution (e.g., "1.2 hr ago", "2.4 hr ago").
+  - 24h+: day format (e.g., "1 day ago", "2 days ago").
+
+**Impact:** "Last updated" timestamps show granular information for hours (decimal precision) while staying simple for short durations (minutes). Users can see exactly when the last refresh occurred without rounding ambiguity.
+
+---
+
+### 7. **6-month future task filter** ✅
+
+**Status:** DONE
+
+**Files:** Code.js, Index.html
+
+**Changes:**
+
+**Code.js:**
+- Modified `ingestTaskMetrics()` function:
+  - Added 6-month cutoff calculation: `sixMonthsCutoff = now + 6 months`.
+  - Refactored open-task logic to exclude tasks due beyond the cutoff.
+  - Tasks without due dates are always counted as open.
+  - Tasks with due dates within 6 months are counted normally.
+  - Overdue and severity calculations unchanged (only apply to tasks in the past).
+
+**Index.html:**
+- Added explanatory note after KPI cards explaining that far-future tasks are excluded from the open-task count.
+- Note clarifies that tasks without due dates are always included.
+
+**Behavior:**
+- A task due 200 days in the future is counted.
+- A task due 250 days in the future is excluded.
+- A task with no due date is always counted.
+- Overdue count and severity remain accurate for genuinely overdue tasks.
+
+**Impact:** Open-task metrics now reflect realistic near-term workload. Far-future tasks (beyond 6 months) no longer inflate the backlog, allowing users to focus on achievable near-term priorities. Metric decomposition remains consistent (on-time + overdue = open).
+
+---
+
+### 8. **Rolling average line** ✅
+
+**Status:** DONE
+
+**Files:** Index.html, JavaScript.html
+
+**Changes:**
+
+**Index.html:**
+- Added "Trend Line" toggle pill in Series control group (after Severity toggle).
+- Toggle ID: `toggleRollingAvg`; unchecked by default.
+
+**JavaScript.html:**
+- Added `calculateRollingAverage()` function: computes trailing window SMA for a data column.
+  - Window size calculated dynamically: `Math.max(2, Math.min(ceil(dataPoints / 50), 168))`.
+  - Adapts to selected range (3D → 7D → 30D → All); clamped between 2 and 168.
+- Refactored `drawStackedLineComboChart()`:
+  - Detects `toggleRollingAvg` state.
+  - When enabled, dynamically adds rolling average columns to the data table.
+  - Calculates rolling average for each visible series (On-Time Open, Overdue, Completed, Severity).
+  - Renders rolling averages as dotted lines (`lineDashStyle: [5, 5]`) with 60% opacity.
+  - Reuses series colors; no separate control per series.
+  - Series visibility toggles apply to both raw and averaged data simultaneously.
+
+**Visual Design:**
+- Dotted lines with 60% opacity for easy distinction from raw data.
+- Same color scheme as underlying series (blue, red, green, purple).
+- No additional legend items; legend shows series names only.
+
+**Behavior:**
+- Toggle OFF: only raw data lines shown (default).
+- Toggle ON: raw data + rolling average overlay displayed.
+- Window size auto-scales with data points.
+- Works with all range filters (3D, 7D, 14D, 30D, All).
+- Toggling individual series (e.g., unchecking Severity) hides both raw and averaged lines.
+
+**Impact:** Users can now visualize trend lines overlaid on raw data to see underlying momentum without manual smoothing. Particularly useful for long date ranges where raw data is noisy. Performance impact negligible (O(n) computation).
+
+---
+
+### 11. **Estimated backlog completion date** ✅
+
+**Status:** DONE
+
+**Files:** Index.html, JavaScript.html, Styles.html
+
+**Changes:**
+
+**JavaScript.html:**
+- Added `calculateAdditionRate(rows, rangeDays)`: Computes tasks added per day over the selected window using formula `(open_start - open_end + completed_in_period) / days_elapsed`.
+- Added `calculateCompletionsInWindow(windowRows)`: Sums positive completion deltas (ignores purges/deletes).
+- Added `calculateCompletionRate(rows, rangeDays)`: Computes tasks completed per day over the selected window.
+- Added `calculateDaysToCompletion(currentOpen, completionRate, additionRate)`: Computes days until backlog reaches zero: `current_open / (completion_rate - addition_rate)`.
+  - Handles edge cases: returns `"0"` if current_open ≤ 0, `"Cannot estimate"` if completion_rate ≤ addition_rate.
+  - Formats result as integer if ≥ 1 day, else 1 decimal place.
+- Added `updateBacklogEstimate(rows)`: Updates the backlog ETA card in the UI. Called from `updateKPIsAndStaleness()` after velocity calculation.
+
+**Index.html:**
+- Added new "Backlog ETA" card (card-purple) with ID `backlogEstimateCard`.
+- Card displays:
+  - Value: `backlogEstimateValue` (days to completion or message).
+  - Subtext: `backlogEstimateNote` (explains basis: "Based on rates over past X days").
+- Card hidden by default; shown only when estimate is computable.
+
+**Styles.html:**
+- Added `.card-purple::before { background: #a142f4; }` for the new card's accent color.
+
+**Calculation Details:**
+- Uses rates computed over the selected date range (3D, 7D, 14D, 30D, or All).
+- **Completion rate:** Sum of positive completion deltas / elapsed days (survives purges).
+- **Addition rate:** (open_start - open_end + completions) / elapsed days.
+- **Net rate:** Completion rate - Addition rate.
+- **Days to zero:** current_open / net_rate.
+
+**Edge Cases:**
+- Current open = 0: Card hidden (no estimate needed).
+- Completion rate ≤ Addition rate: Shows "Cannot estimate" (backlog stable or growing).
+- Insufficient data (< 2 snapshots in window): Card hidden.
+
+**Behavior:**
+- Estimate updates whenever:
+  - Data is loaded (`onDataLoaded`)
+  - Range filter changes (`setRangeFilter` triggers `updateChartVisibility` → `renderCharts` → `updateKPIsAndStaleness`).
+- Uses same window logic as chart range filters.
+- Transparent about uncertainty: labeled "Backlog ETA" and includes note on basis.
+
+**Impact:** Users gain actionable insight into how long to clear their backlog at current pace. Particularly useful for capacity planning and prioritization decisions. Explicit handling of edge cases prevents misleading estimates.
+
+---
+
+### 9. **Danger Zone: hourly downsample of last-year data** ✅
+
+**Status:** DONE
+
+**Files:** Code.js, Index.html, JavaScript.html
+
+**Changes:**
+
+**Code.js:**
+- Added `downsampleLastYearToHourly()` function following the same pattern as `pruneDataOlderThan1Year()`:
+  - Identifies all rows with `timestamp >= now - 365 days`.
+  - Sorts candidate rows ascending by timestamp.
+  - Applies rolling 60-minute window logic: iterates chronologically, tracking a window anchor timestamp; if the next snapshot falls within 60 minutes of the anchor, the previously kept row is marked for deletion and replaced by the newer one (latest-wins); if it falls outside the window, a new window starts.
+  - Same safety guardrails as pruning: aborts if fewer than 10 total rows, aborts if more than 80% of rows would be removed.
+  - Batch-deletes rows bottom-to-top to avoid index shifting.
+  - Returns `{success, totalBefore, totalAfter, totalRemoved, percentageRemoved, durationMs, message}`.
+  - Rows older than 365 days are untouched (left to `pruneDataOlderThan1Year`).
+  - Uses the existing `acquireSyncLock()` / `releaseSyncLock()` mechanism to prevent concurrent maintenance operations.
+
+**Index.html:**
+- Added "Downsample Last Year (1/hour)" button (📉 icon, btn-secondary styling) in Danger Zone.
+- Placed between "Delete Old Done Tasks (>8w)" and "Prune Old Data (>1 year)", matching the planned impact ordering.
+
+**JavaScript.html:**
+- Added `handleDownsampleLastYear()`: shows confirmation dialog explaining the action is irreversible, calls `downsampleLastYearToHourly()` RPC, and shows success/error feedback via notification and status banner.
+- Added `showDownsampleResultModal()`: displays a result modal with rows before/after/removed, percentage removed, and execution time (mirrors `showPruneResultModal()`).
+- Registered `btnDownsampleLastYear` in `setButtonsDisabled()` so it disables during any in-flight maintenance operation.
+- Exposed `handleDownsampleLastYear` in the public `DashboardApp` API.
+
+**Binning logic (rolling 60-minute window, latest-wins):**
+- Snapshot's window is the 60-minute span ending at its own timestamp.
+- If a later snapshot falls within 60 minutes of the currently kept snapshot, the older one is discarded and the newer one is kept (implements "Latest" aggregation decided earlier).
+- If a later snapshot falls outside the window, it starts a new window and is kept.
+
+**Behavior:**
+- Requires explicit confirmation before running (irreversible).
+- On success: shows row-count feedback (e.g., "Removed 1,842 rows, reduced to 1/hour"), refreshes dashboard data.
+- On failure: shows error without altering data.
+- Only touches the last 365 days; older rows are unaffected.
+
+**Impact:** Users can now compact the last year of granular snapshot data down to at most one row per rolling hour, removing intra-hour correction noise while preserving genuine hourly trend data. Reduces sheet size and improves chart rendering performance for the most data-dense period.
+
+---
+
+## All Planned Items — Status Summary
+
+All items from the requirements document have been implemented.
 
 | #    | Item                                             | Files                       | Effort | Status  |
 | ---- | ------------------------------------------------ | --------------------------- | ------ | ------- |
-| 5    | Graph downsampling / smoothing                   | JavaScript.html             | M      | ⏳ Ready |
-| 6    | Configurable sheet-data auto-fetch               | Index.html, JavaScript.html | M      | ⏳ Ready |
-| 7    | 6-month future task filter                       | Code.js, JavaScript.html    | S      | ⏳ Ready |
-| 8    | Rolling average line                             | JavaScript.html             | M      | ✅ Ready |
-| 9    | Danger Zone: hourly downsample of last-year data | Index.html, JavaScript.html, Code.js | M | ✅ Ready |
+| 5    | Graph downsampling / smoothing                   | JavaScript.html             | M      | ✅ DONE |
+| 6    | Configurable sheet-data auto-fetch               | Index.html, JavaScript.html | M      | ✅ DONE |
+| 7    | 6-month future task filter                       | Code.js, JavaScript.html    | S      | ✅ DONE |
+| 8    | Rolling average line                             | JavaScript.html             | M      | ✅ DONE |
+| 9    | Danger Zone: hourly downsample of last-year data | Index.html, JavaScript.html, Code.js | M | ✅ DONE |
+| 10   | Overdue Severity: 1 decimal place formatting     | JavaScript.html, Styles.html | S      | ✅ DONE |
+| 11   | Estimated backlog completion date                | JavaScript.html, Index.html | M      | ✅ DONE |
+| 12   | Consistent action-button sizing                  | Styles.html, Index.html     | S      | ✅ DONE |
+| 13   | Higher-resolution elapsed-time display           | JavaScript.html             | S      | ✅ DONE |
+
+The implementation notes below are retained for historical reference and
+design rationale.
 
 ### Implementation 6 — Configurable sheet-data auto-fetch
 
@@ -330,7 +614,7 @@ Rationale:
      but lags perceived trend by 0 (center-aligned).
    - Trailing: `avg[i] = mean(data[i - window : i])` — lags by window/2,
      standard in time-series.
-   - Decision: **Trailing** (standard; easier to reason about "momentum
+   - Recommendation: **Trailing** (standard; easier to reason about "momentum
      so far").
 
 2. **How to handle series toggle with rolling average?**
@@ -453,25 +737,219 @@ destructive impact remains:
 - Existing chart rendering and KPI calculations continue to work against the
   reduced dataset.
 
-## Recommended Implementation Order
+### Implementation 10 — Overdue Severity: 1 decimal place formatting
 
-1. **Graph downsampling / smoothing** (improves chart UX for long ranges)
-2. **Configurable sheet-data auto-fetch** (establishes background refresh behavior)
-3. **6-month future task filter** (independent backend filtering)
-4. **Danger Zone: hourly downsample of last-year data** (ready; insert after Prune Old Data in Danger Zone)
-5. **Rolling average line** (non-destructive, chart-only enhancement)
+**Status:** READY FOR IMPLEMENTATION
 
-## Testing Checklist for Remaining Items
+**Goal:** Display Overdue Severity with exactly 1 digit after the decimal
+separator in both the KPI card and the graph, while backend data remains
+unchanged.
+
+**Rationale:** Reduces visual clutter and improves readability. A 2-decimal
+format (e.g., 70.00) provides false precision for this metric.
+
+**Implementation approach:**
+
+1. In the KPI card display (`updateKPIsAndStaleness()`), format the severity
+   value: `severity.toFixed(1)`.
+2. In the chart data preparation, format severity values: `severity.toFixed(1)`.
+3. Backend `Code.js` and Google Sheet data remain unchanged (no rounding).
+4. Frontend only performs display-time formatting when rendering text or
+   chart labels.
+
+**Implementation steps:**
+
+1. Find all places where `overdue_severity` is displayed in text (KPI card).
+2. Find all places where severity values are prepared for the chart.
+3. Apply `.toFixed(1)` to convert to string with 1 decimal place.
+4. Ensure rounding follows JavaScript's standard banker's rounding (round
+   half to even), or explicitly choose `Math.round(value * 10) / 10` if
+   standard rounding is preferred.
+
+**Acceptance checks:**
+
+- KPI card displays severity as (e.g.) `70.2` not `70.23`.
+- Chart labels and tooltips display severity as (e.g.) `70.2`.
+- Backend data remains unchanged.
+- Rounding is applied consistently across all displays.
+
+### Implementation 11 — Estimated backlog completion date
+
+**Status:** READY FOR IMPLEMENTATION
+
+**Goal:** Display an estimate of days from now until the open-task backlog
+reaches zero, calculated from current open-task count, task completion rate,
+and task-addition rate over the selected historical window.
+
+**Methodology:**
+
+The estimate uses three inputs:
+1. **Current open count:** Latest `open` metric.
+2. **Completion rate:** Tasks closed per day, from velocity calculation
+   (existing; uses 7-day window or selected range).
+3. **Addition rate:** Tasks added per day, calculated as
+   `(open_today - open_history_start + completed_in_period) / days_elapsed`.
+
+Formula:
+```
+days_to_zero = current_open / (completion_rate - addition_rate)
+```
+
+If `completion_rate <= addition_rate`, display "∞" or "Cannot estimate" (backlog growing or stable).
+
+**Presentation:**
+
+- Display in a new KPI card or sub-section of the dashboard.
+- Label: "Backlog at current pace: ~X days" or "Est. completion: ~X days".
+- Explicitly note it is an estimate (e.g., footnote: "Based on historical
+  rates over [selected range]").
+- Only display estimate if `completion_rate > addition_rate` and current
+  `open > 0`.
+
+**Implementation steps:**
+
+1. Calculate `addition_rate` from the selected historical window.
+2. Reuse existing velocity/completion rate calculation (already computed).
+3. Compute days-to-zero: `current_open / (completion_rate - addition_rate)`.
+4. Format result as an integer or 1 decimal place.
+5. Add a new card or row in the KPI section with the estimate.
+6. Include a small note explaining it is based on historical rates.
+
+**Acceptance checks:**
+
+- Estimate is displayed prominently (new card or section).
+- Clearly labeled as an estimate.
+- Uses completion and addition rates calculated from the selected range.
+- Handles edge cases: completion rate ≤ addition rate (show "Cannot estimate").
+- Handles zero open tasks (hide estimate or show "0 days").
+- Estimate updates when date range changes.
+
+### Implementation 12 — Consistent action-button sizing
+
+**Status:** READY FOR IMPLEMENTATION
+
+**Goal:** All header action buttons have identical height and aligned content,
+regardless of label text length or line-wrapping.
+
+**Current problem:** Button labels vary in length; long labels wrap to 2+ lines,
+causing uneven button heights and misaligned content.
+
+**Implementation approach:**
+
+1. Define a minimum button height (e.g., `min-height: 44px` for touch targets;
+   or `40px` for desktop).
+2. Use `display: flex; align-items: center; justify-content: center;` to center
+   all content vertically and horizontally within the button.
+3. Set `flex-direction: column` to stack icon and label vertically if wrapping occurs.
+4. Apply consistent `padding` (e.g., `8px 12px`) to all buttons.
+5. Set `white-space: nowrap;` to prevent wrapping, OR allow wrapping with
+   consistent line-height (e.g., `line-height: 1.2`).
+6. Test with long labels to ensure all buttons align at the same baseline.
+
+**CSS rule:**
+
+```css
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;  /* space between icon and label */
+  min-height: 40px;  /* or 44px for touch */
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.2;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+```
+
+**Acceptance checks:**
+
+- All buttons in the header action group have the same height.
+- Button content (icon + label) is vertically centered.
+- Long labels wrap cleanly without breaking button layout.
+- Touch target is at least 44px (mobile a11y).
+- Visual alignment is consistent across all buttons.
+
+### Implementation 13 — Higher-resolution elapsed-time display
+
+**Status:** READY FOR IMPLEMENTATION
+
+**Goal:** Display relative age ("last updated X ago") with higher resolution
+for values ≥ 1 hour, using decimal hours (e.g., "1.2 hours ago" instead of
+rounding down to "1 hour ago"). Minute resolution continues for sub-1-hour values.
+
+**Implementation approach:**
+
+Refactor `formatTimeAgo()` to return different precision based on elapsed time:
+
+```javascript
+function formatTimeAgo(minutes) {
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return minutes + ' min ago';
+  
+  const hours = minutes / 60;
+  if (hours < 24) {
+    // 1 decimal place for hours ≥ 1h
+    return hours.toFixed(1) + ' hr ago';
+  }
+  
+  const days = hours / 24;
+  return Math.floor(days) + ' day' + (days >= 2 ? 's' : '') + ' ago';
+}
+```
+
+**Example outputs:**
+
+- 15 minutes elapsed: "15 min ago"
+- 45 minutes elapsed: "45 min ago"
+- 61 minutes elapsed: "1.0 hr ago"
+- 72 minutes elapsed: "1.2 hr ago"
+- 90 minutes elapsed: "1.5 hr ago"
+- 2 hours 24 minutes elapsed: "2.4 hr ago"
+- 26 hours elapsed: "1 day ago"
+- 48 hours elapsed: "2 days ago"
+
+**Implementation steps:**
+
+1. Locate the existing `formatTimeAgo()` function in JavaScript.html.
+2. Replace the hour/day logic with the new precision-based logic above.
+3. Update calls to this function (used in both timestamp displays).
+4. Test with various elapsed times to confirm output matches expectations.
+
+**Acceptance checks:**
+
+- Sub-1-hour times show minute resolution (e.g., "15 min ago").
+- 1-hour+ times show 1 decimal place (e.g., "1.2 hr ago").
+- Times ≥ 24 hours show day format (e.g., "1 day ago", "2 days ago").
+- No hardcoded references to specific minute/hour thresholds outside the
+  function.
+
+## Implementation Order (as executed)
+
+1. ✅ **Higher-resolution elapsed-time display**
+2. ✅ **Overdue Severity: 1 decimal place formatting**
+3. ✅ **Consistent action-button sizing**
+4. ✅ **Graph downsampling / smoothing**
+5. ✅ **Configurable sheet-data auto-fetch**
+6. ✅ **6-month future task filter**
+7. ✅ **Rolling average line**
+8. ✅ **Estimated backlog completion date**
+9. ✅ **Danger Zone: hourly downsample of last-year data**
+
+## Testing Checklist for Completed Items
 
 ### Configurable sheet-data auto-fetch
 
 - [ ] Toggle can enable/disable polling.
-- [ ] Interval can be configured.
+- [ ] Interval can be configured (15/30/60 minutes).
 - [ ] Polling stops while the tab is hidden.
 - [ ] Polling resumes when the tab is visible.
 - [ ] Background polling never calls the Tasks API.
 - [ ] Sheet-fetch age updates after successful polling.
-- [ ] Default interval/request volume is documented.
 
 ### 6-month future-task filter
 
@@ -488,14 +966,41 @@ destructive impact remains:
 - [ ] Severity remains on the secondary axis.
 - [ ] Range and series controls still work.
 
-## File Deliverables for Next Iteration
+### Rolling average line
 
-1. **Index.html** — auto-fetch controls, UI note for future-task filter, and
-   Danger Zone button for hourly downsample (pending approach decision).
-2. **JavaScript.html** — chart downsampling logic, background refresh
-   lifecycle, and confirmation handler for hourly downsample.
-3. **Styles.html** — no changes expected.
-4. **Code.js** — 6-month future-task filtering during ingestion, and hourly
-   downsample backend logic (pending approach decision).
+- [ ] Toggle shows/hides dotted trend lines for all visible series.
+- [ ] Window size adapts to selected range.
+- [ ] Series visibility toggles apply to both raw and averaged lines.
+
+### Estimated backlog completion date
+
+- [ ] Card hidden when open count is 0.
+- [ ] Card hidden/shows "Cannot estimate" when backlog is stable or growing.
+- [ ] Estimate updates when range filter changes.
+
+### Danger Zone: hourly downsample of last-year data
+
+- [ ] Confirmation dialog appears before running.
+- [ ] Rows older than 365 days are untouched.
+- [ ] At most 1 row per rolling 60-minute window remains in the last year.
+- [ ] Result modal shows rows before/after/removed and duration.
+- [ ] Button disables during in-flight maintenance operations.
+
+## File Deliverables Summary
+
+1. **Index.html** — auto-fetch controls, UI note for future-task filter, 
+   Danger Zone buttons (downsample + existing), KPI card for backlog 
+   completion estimate, rolling-average toggle, and button layout adjustments.
+2. **JavaScript.html** — chart downsampling logic, background refresh 
+   lifecycle, rolling average toggle and calculation, confirmation handler 
+   for hourly downsample, severity formatting (1 decimal), elapsed-time 
+   formatting (higher resolution), and backlog completion-date calculation.
+3. **Styles.html** — consistent button sizing, minimum heights, flexbox 
+   alignment, and card-purple styling for the backlog estimate card.
+4. **Code.js** — 6-month future-task filtering during ingestion, and hourly 
+   downsample backend logic (`downsampleLastYearToHourly()`).
+
+All planned items are implemented. Future work should be captured as new
+items rather than appended to this closed plan.
 
 All previously completed items remain unchanged.
