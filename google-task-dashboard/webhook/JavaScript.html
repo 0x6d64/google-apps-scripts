@@ -441,8 +441,8 @@
       const additionRate = calculateAdditionRate(rows, activeRangeDays);
       const estimate = calculateDaysToCompletion(currentOpen, completionRate, additionRate);
 
-      // Only show if we have a valid estimate or "Cannot estimate"
-      if (estimate === '0' || (typeof estimate === 'string' && estimate.includes('Cannot'))) {
+      // Show card unless backlog is zero
+      if (estimate === '0') {
         estCard.style.display = 'none';
       } else {
         estCard.style.display = 'block';
@@ -450,8 +450,12 @@
         const note = document.getElementById('backlogEstimateNote');
         if (label) label.textContent = estimate;
         if (note) {
-          const rangeLabel = activeRangeDays === 'all' ? 'all time' : activeRangeDays + ' days';
-          note.textContent = 'Based on rates over past ' + rangeLabel;
+          if (estimate === 'Cannot estimate') {
+            note.textContent = 'Backlog stable or growing';
+          } else {
+            const rangeLabel = activeRangeDays === 'all' ? 'all time' : activeRangeDays + ' days';
+            note.textContent = 'Based on rates over past ' + rangeLabel;
+          }
         }
       }
     }
