@@ -1000,7 +1000,12 @@ function formatTimeAgo(minutes) {
 4. **Code.js** — 6-month future-task filtering during ingestion, and hourly 
    downsample backend logic (`downsampleLastYearToHourly()`).
 
-All planned items are implemented. Future work should be captured as new
-items rather than appended to this closed plan.
-
-All previously completed items remain unchanged.
+### User supplied requirements
+- when the tab is not focused, still do a fetch from the google sheet every 3h.
+- calculate 3 velocities
+- add weights:
+  - No prefix   → weight 1
+  - !           → weight 2
+  - !!          → weight 4
+  - !!!         → weight 8
+- 
