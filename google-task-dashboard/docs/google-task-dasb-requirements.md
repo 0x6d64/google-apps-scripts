@@ -42,6 +42,7 @@ rely on the Google auth for access.
   * `completed`: Count of completed tasks (`status == "completed"`)
   * `overdue`: Count of open tasks where `due < snapshot_timestamp`
   * `overdue_severity`: Sublinear overdue debt score calculated as $\sum \sqrt{\max(0, (\text{now} - \text{due}) / 1\,\text{day})}$ across all late open tasks. Fractional days are retained. Applying the square root dampens the impact of extreme zombie-task outliers while still penalizing aging tasks progressively.
+  * Open tasks due more than 6 months in the future are excluded from the `open` and `overdue` metrics. Tasks without a due date remain included.
 * **Auto-creation & Initialization of Sheet:**
   * Checks Script Properties for an existing `SPREADSHEET_ID`
   * If missing or invalid, automatically creates a new Google Spreadsheet (e.g. `"Google Tasks Metrics Storage"`), initializes the header row (`timestamp`, `open`, `completed`, `overdue`, `overdue_severity`), and saves the spreadsheet ID to Script Properties
@@ -76,7 +77,24 @@ rely on the Google auth for access.
 
 * Single-page dashboard served via Apps Script HTML Service
 * Responsive layout with top summary KPI cards (`Open Tasks`, `Completed`, `Overdue Count`, `Overdue Severity`)
+* The KPI section shall also provide a **Backlog ETA** card when an estimate
+  is computable. It uses completion and addition rates over the selected range,
+  shows the estimated days to zero, and is hidden when the backlog is zero or
+  the completion rate does not exceed the addition rate.
 * **Chart Visualizations:**
+  * **Graph Downsampling:** Long date ranges are downsampled for rendering,
+    while underlying data and KPI values remain unchanged. Short ranges retain
+    sufficient visual detail.
+  * **Rolling Average / Trend Line:** An optional dotted, reduced-opacity
+    rolling average overlays each visible series. The window size adapts to
+    the selected range and series visibility applies to both raw and average
+    lines. Severity remains an independent secondary-axis average.
+  * **Rolling Average / Trend Line:** An optional dotted, reduced-opacity
+    rolling average overlays each visible series. The window size adapts to
+    the selected range and series visibility applies to both raw and average
+    lines. For stacked series, the average uses the same cumulative stacking
+    logic as the corresponding raw series; severity remains an independent
+    secondary-axis average.
   * **Stacked Area/Line + Dual-Axis Overlay Chart (Primary Chart):**
     * *Stacked Volume (Left Y-Axis):* Stacked lines with area shading decomposing tasks into non-overlapping mutually exclusive layers: **On-Time Open** (`open - overdue`), **Overdue** (`overdue`), and **Completed** (`completed`). Stacking preserves total volume without double-counting overdue tasks.
     * *Severity Line Overlay (Right Y-Axis):* `Overdue Severity` (score based on $\sqrt{\text{days}}$) overlaid on the second vertical axis with prominent unstacked line and distinct points.
@@ -85,14 +103,68 @@ rely on the Google auth for access.
   * **Date Range Filtering:** Quick-select range filters (e.g., 3 Days, 7 Days, 14 Days, 30 Days, All Time) to dynamically filter rows without backend roundtrips
 * **Action Controls & Housekeeping (with descriptive tooltips):**
   * **View Sheet**: Direct link opening the backing Google Spreadsheet in Google Drive
-  * **Reload Data**: Re-reads historical snapshots from the Google Sheet without calling the Google Tasks API (retrieves background sync updates)
-  * **Sync Now**: Queries the Google Tasks API immediately across all task lists, appends a new snapshot row to the Google Sheet, and refreshes the charts
+  * **Fetch Data From Sheet**: Re-reads historical snapshots from the Google Sheet without calling the Google Tasks API (retrieves background sync updates)
+  * **Ingest From Tasks**: Queries the Google Tasks API immediately across all task lists, appends a new snapshot row to the Google Sheet, and refreshes the charts
+  * **Launch Google Tasks**: Direct link opening the Google Tasks view in Google Calendar in a separate browser tab
   * **Danger Zone Section**:
     * **Auto-Sync Toggle**: Control for the automated 3-hour background sync trigger (enabled by default via Script Properties)
     * **Delete Old Done Tasks (>8w)**: Selectively deletes tasks completed more than 8 weeks ago from Google Tasks, keeping recent completions intact
     * **Purge Completed Tasks**: Triggers ingestion first, persists snapshot to sheet, and automatically clears *all* completed tasks across all lists from Google Tasks
+    * **Downsample Last Year (1/hour)**: Permanently reduces snapshots from the last 365 days to at most 1 entry per rolling 60-minute window, keeping the latest snapshot in each window
     * **Prune Old Data (>1 year)**: Danger Zone action providing on-demand pruning of >1 year records down to 1 entry/day with confirmation dialog and detailed statistical feedback modal
+    * **Configurable Sheet-Data Auto-Fetch**: Optional background fetch of existing sheet data at 15, 30, or 60-minute intervals, paused while the browser tab is hidden. When the tab regains focus after the interval elapsed, a fetch is performed immediately.
 * Lightweight responsive styling for desktop and mobile. On small screens, the KPI summary cards are hidden and the header action buttons use a consistent responsive layout.
+
+* **Dashboard behavior and responsive requirements:**
+  * On viewports narrower than 768 px, the header action buttons shall use a
+    responsive layout that stacks or distributes them evenly while remaining
+    usable on small screens.
+  * On viewports narrower than 768 px, the KPI summary cards shall be hidden.
+  * KPI cards shall use reduced vertical padding while preserving their labels,
+    values, and supporting text.
+  * Header action buttons shall use consistent sizing, minimum height,
+    alignment, spacing, and text wrapping behavior.
+  * The Danger Zone shall be collapsed by default when the dashboard is opened.
+    Expanding and collapsing it shall rotate the disclosure arrow smoothly by
+    90 degrees: right-pointing (`→`) when collapsed and down-pointing (`↓`)
+    when expanded.
+  * The Danger Zone summary shall prevent text selection while it is being
+    clicked or toggled, so the interaction shall not show a text-selection
+    cursor or blinking insertion cursor.
+  * The Danger Zone actions shall be ordered from highest to lowest destructive
+    impact.
+  * The dashboard shall display completion throughput velocity for 24-hour,
+    3-day, and 7-day windows. Each velocity shall be calculated using the
+    actual elapsed time between the snapshots used for that window rather than
+    assuming a fixed sampling interval. Positive completion increments shall
+    be accumulated while drops caused by purges or deletions are ignored.
+  * The date-range controls shall provide a dedicated 3-day (`3D`) quick
+    filter in addition to 7-day, 14-day, 30-day, and All ranges.
+  * The overdue severity calculation shall retain fractional overdue days.
+    For example, an overdue age of 2.3 days shall contribute `sqrt(2.3)` to
+    the severity score rather than being truncated to 2 days before applying
+    the square root.
+  * The dashboard shall continuously refresh the relative age of the latest
+    snapshot without making backend requests solely for this display. The
+    relative age shall update at least every 10 seconds and shall be refreshed
+    immediately whenever new dashboard data is fetched.
+  * The dashboard shall display separate relative ages for the latest task
+    snapshot and the most recent fetch from the Google Sheet.
+  * Sheet-fetch and snapshot ages shall support higher-resolution elapsed-time
+    formatting: minute resolution below 1 hour, decimal-hour resolution from
+    1 hour to 24 hours, and day resolution from 24 hours onward.
+  * Sheet-data auto-fetch shall be configurable at 15, 30, or 60 minutes and
+    enabled by default. It shall pause while the tab is hidden and, when the
+    tab regains focus, fetch immediately if the configured interval elapsed
+    while hidden. Background fetches shall never call the Google Tasks API.
+  * The dashboard shall display an estimated backlog completion time when the
+    current open count is greater than zero and the historical completion rate
+    exceeds the addition rate. The estimate shall use the selected date range
+    and shall otherwise be hidden or display "Cannot estimate".
+  * Overdue Severity shall be displayed with exactly one decimal place in the
+    KPI card and chart while backend values remain unchanged.
+  * The header shall provide a direct link to the Google Tasks view in Google
+    Calendar, opening it in a separate browser tab.
 
 ## Workflows
 
@@ -154,6 +226,33 @@ sequenceDiagram
     Frontend-->>User: Show notification bubble & refresh dashboard
 ```
 
+### Downsample Last Year Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Frontend as HTML Dashboard
+    participant AppsScript as Apps Script Backend
+    participant Sheet as Google Sheet
+
+    User->>Frontend: Clicks "Downsample Last Year (1/hour)"
+    Frontend->>User: Display confirmation dialog
+    User->>Frontend: Confirms downsampling
+    Frontend->>AppsScript: Call downsampleLastYearToHourly()
+    AppsScript->>AppsScript: Acquire sync lock
+    AppsScript->>Sheet: Read rows from last 365 days
+    AppsScript->>AppsScript: Apply rolling 60-minute latest-wins downsampling
+    alt Safety threshold exceeded
+        AppsScript-->>Frontend: Return error & abort
+    else Valid downsampling
+        AppsScript->>Sheet: Batch delete non-survivor rows
+        AppsScript-->>Frontend: Return stats
+    end
+    AppsScript->>AppsScript: Release sync lock
+    Frontend-->>User: Show result stats & refresh dashboard
+```
+
 ### Manual Prune Old Data Sequence
 
 ```mermaid
@@ -200,19 +299,18 @@ sequenceDiagram
 
 ## Next steps and features
 
-### Done, need update in requirements
+The following features remain planned and are not yet requirements for the
+current implementation:
 
-* fix formatting of the buttons "📊 View Sheet 🔄 Reload Data ⚡ Sync now"
-  since on mobile they get a consistent responsive layout
-* danger zone: dropdown icon needs to change shape when folded, right now it stays "▼" also when
-  folded (should only be this when unfolded)
-* on mobile: hide the cards that give the current numbers
+### Planned in implementation plan
 
-### Planned
+- **90-degree Danger Zone arrow rotation** — The Danger Zone disclosure arrow
+  shall point right (`→`) while collapsed and down (`↓`) while expanded,
+  using a 90-degree rotation transition rather than a 180-degree rotation.
+  - Effort: S
+  - Files: Styles.html, Index.html
 
-* implement smoothing in the graphs: if a lot of data exist in a specific 
-  period, don't plot them all
-* calculate 3 throughput metrics: for the last 24h, last 3 days, last 7 days
-* use fractional days for overdue age calculation instead of flooring to whole
-  days
-* in the graph views: add a period that is shorter than 7 days, e.g. 3 days
+
+
+
+  

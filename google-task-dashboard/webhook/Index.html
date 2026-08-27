@@ -18,19 +18,26 @@
     <header class="header">
       <div>
         <h1>Tasks Dashboard</h1>
-        <p class="subtitle" id="lastUpdatedSubtext">Aggregate Google Tasks Health & Time Series Trends</p>
+        <p class="subtitle" id="lastSnapshotAge">Aggregate Google Tasks Health & Time Series Trends</p>
+        <p class="subtitle" id="lastSheetFetchAge" style="display: none;"></p>
       </div>
 
       <div class="header-actions">
         <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
           <span class="btn-icon">📊</span> View Sheet
         </a>
+        <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
+          <span class="btn-icon">🔗</span> Launch Google Tasks
+        </a>
         <button id="btnReloadData" class="btn btn-secondary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
-          <span class="btn-icon">🔄</span> Reload Data
+          <span class="btn-icon">🔄</span> Fetch Data From Sheet
         </button>
         <button id="btnSyncNow" class="btn btn-primary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
-          <span class="btn-icon">⚡</span> Sync Now
+          <span class="btn-icon">⚡</span> Ingest From Tasks
         </button>
+        <a id="btnAdmin" href="#" target="_blank" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
+          <span class="btn-icon">⚙️</span> Admin
+        </a>
       </div>
     </header>
 
@@ -48,7 +55,7 @@
       <div class="card card-green">
         <div class="label">Completed in List</div>
         <div class="value" id="kpiCompleted">-</div>
-        <div class="subtext" id="kpiVelocitySubtext">7d Velocity: - /day</div>
+        <div class="subtext" id="kpiVelocitySubtext">24h: - &nbsp; 3d: - &nbsp; 7d: - /day</div>
       </div>
 
       <div class="card card-red">
@@ -62,7 +69,18 @@
         <div class="value" id="kpiSeverity">-</div>
         <div class="subtext">Backlog debt (√days)</div>
       </div>
+
+      <div class="card card-purple" id="backlogEstimateCard" style="display: none;">
+        <div class="label">Backlog ETA</div>
+        <div class="value" id="backlogEstimateValue">-</div>
+        <div class="subtext" id="backlogEstimateNote">Days to completion</div>
+      </div>
     </section>
+
+    <!-- Filter Explanation Note -->
+    <div style="background: var(--surface-light); border-left: 4px solid var(--text-secondary); padding: 12px 16px; margin: 0 0 16px 0; border-radius: 4px; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+      <strong>Note on task metrics:</strong> The open-task count excludes tasks due more than 6 months in the future. This provides a realistic view of near-term work. Tasks without due dates are always counted.
+    </div>
 
     <!-- Interactive Filters & Controls Toolbar -->
     <section class="controls-toolbar">
@@ -92,6 +110,9 @@
           <label class="toggle-pill pill-severity" title="Toggle Overdue Severity score (overlay line on right axis)">
             <input type="checkbox" id="toggleSeverity" checked onchange="DashboardApp.updateChartVisibility()"> Severity (√days Line)
           </label>
+          <label class="toggle-pill pill-trend" title="Toggle rolling average trend lines (dotted, 60% opacity) for all visible series">
+            <input type="checkbox" id="toggleRollingAvg" onchange="DashboardApp.updateChartVisibility()"> Trend Line
+          </label>
         </div>
       </div>
     </section>
@@ -109,10 +130,10 @@
 
     <!-- Collapsible Danger Zone for Housekeeping -->
     <section class="panel danger-zone-panel">
-      <details class="danger-zone-details" open>
+      <details class="danger-zone-details">
         <summary class="danger-zone-summary" title="Click to expand or collapse dangerous maintenance options">
           <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
-          <span class="summary-arrow">▼</span>
+          <span class="summary-arrow">→</span>
         </summary>
         <div class="danger-zone-content">
           <div class="danger-zone-setting">
@@ -123,12 +144,31 @@
             <p class="setting-desc">When enabled, Apps Script captures snapshot metrics in the Google Sheet every 3 hours automatically.</p>
           </div>
 
+          <div class="danger-zone-setting">
+            <label class="trigger-toggle-label" title="Enable dashboard auto-refresh from the Google Sheet without calling the Tasks API.">
+              <input type="checkbox" id="toggleAutoFetch" checked>
+              <strong>Auto-Refresh Dashboard from Sheet</strong>
+            </label>
+            <p class="setting-desc">When enabled, the dashboard automatically refreshes data from the sheet at the selected interval. Updates pause when the browser tab is not visible.</p>
+            <div style="margin-top: 8px; margin-left: 24px;">
+              <label for="autoFetchInterval" style="font-size: 13px; color: var(--text-secondary);">Interval:</label>
+              <select id="autoFetchInterval" style="margin-left: 6px; padding: 4px 8px; font-size: 13px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text);">
+                <option value="15">15 minutes</option>
+                <option value="30" selected>30 minutes</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+          </div>
+
           <div class="danger-zone-actions">
+            <button id="btnSyncClear" class="btn btn-danger" title="Permanently clear and archive all completed tasks from Google Tasks after safely appending a final metrics snapshot to the Google Sheet." onclick="DashboardApp.handleSyncAndClear()">
+              <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
+            </button>
             <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact." onclick="DashboardApp.handleDeleteOldCompletedTasks()">
               <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
             </button>
-            <button id="btnSyncClear" class="btn btn-danger" title="Permanently clear and archive all completed tasks from Google Tasks after safely appending a final metrics snapshot to the Google Sheet." onclick="DashboardApp.handleSyncAndClear()">
-              <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
+            <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days to at most 1 entry per rolling 60-minute window, keeping the latest snapshot in each window. Permanently removes intra-hour data." onclick="DashboardApp.handleDownsampleLastYear()">
+              <span class="btn-icon">📉</span> Downsample Last Year (1/hour)
             </button>
             <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed." onclick="DashboardApp.handlePruneOldData()">
               <span class="btn-icon">🧹</span> Prune Old Data (>1 year)
