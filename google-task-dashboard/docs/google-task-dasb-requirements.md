@@ -267,9 +267,5 @@ current implementation:
   - Files: Styles.html, Index.html
 
 
-### user supplied, not yet planned
-- UI: Overdue Severity shall have only 1 digit after the decimal separator (in graph and also in the card, backend can be left unaffected)
-- Estimated task completion: Display an estimate of the number of days from now until the open-task backlog reaches zero, calculated from the current open-task count, the completion rate, and the estimated task-addition rate over the selected historical window; explicitly present the result as an estimate.
-- Consistent action-button sizing: All header action buttons shall have the same height and align their content consistently, regardless of the button label wrapping to one or more lines.
-- mark in the UI "last updated x hours ago" should have a higher resolution for values larger than 1h. Example: 1.2 hours ago instead of rounding down to 1 hour. For low values under 1 hour minute resolution is enough.
+
   
