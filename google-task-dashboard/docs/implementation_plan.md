@@ -1001,11 +1001,15 @@ function formatTimeAgo(minutes) {
    downsample backend logic (`downsampleLastYearToHourly()`).
 
 ### User supplied requirements
-- when the tab is not focused, still do a fetch from the google sheet every 3h.
+- change request: when the tab is not in focus, it does not do a data fetch 
+  from the google sheet. but once it regains focus, the fetch shall happen 
+  immediately if the timer ran out  in the meantime (e.g. when the tab was 
+  sleeping for 31 minutes and it fetches every 30min: do a fetch on focus gain)
 - calculate 3 velocities
 - add weights:
   - No prefix   → weight 1
   - !           → weight 2
   - !!          → weight 4
   - !!!         → weight 8
+- Correct stacked average lines: Rolling-average lines shall use the same cumulative stacking logic as the corresponding stacked series, so each average line aligns with its associated stacked boundary and dynamically respects series visibility; the severity average remains an independent secondary-axis average.
 - 
