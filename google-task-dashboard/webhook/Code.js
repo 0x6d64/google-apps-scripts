@@ -152,7 +152,10 @@ function ingestTaskMetrics() {
                 if (dueDate < now) {
                   totalOverdue++;
                   const diffMs = now.getTime() - dueDate.getTime();
-                  const daysOverdue = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+                  const daysOverdue = Math.max(
+                    0,
+                    diffMs / (1000 * 60 * 60 * 24)
+                  );
                   totalOverdueSeverity += Math.sqrt(daysOverdue);
                 }
               }

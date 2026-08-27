@@ -13,6 +13,7 @@
     let autoFetchEnabled = true;
     let autoFetchIntervalMs = 30 * 60 * 1000; // Default 30 minutes
     let autoFetchTimer = null;
+    let lastAutoFetchTime = Date.now();
 
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
@@ -142,9 +143,15 @@
      */
     function performAutoFetch() {
       // Silently fetch data; only show errors
-      google.script.run.withFailureHandler((error) => {
-        console.error('Auto-fetch error:', error);
-      }).getDashboardData();
+      google.script.run
+        .withSuccessHandler((data) => {
+          lastAutoFetchTime = Date.now();
+          onDataLoaded(data);
+        })
+        .withFailureHandler((error) => {
+          console.error('Auto-fetch error:', error);
+        })
+        .getDashboardData();
     }
 
     /**
@@ -160,6 +167,9 @@
         } else {
           // Tab is visible: resume auto-fetch
           if (autoFetchEnabled) {
+            if (Date.now() - lastAutoFetchTime >= autoFetchIntervalMs) {
+              performAutoFetch();
+            }
             startAutoFetch();
           }
         }
@@ -496,28 +506,34 @@
      * @param {Array<Array<any>>} rows
      */
     function calculateVelocity(rows) {
-      const now = Date.now();
-      const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-      const recentRows = rows.filter(r => new Date(r[0]).getTime() >= sevenDaysAgo);
+      const calculate = (days) => {
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        const recentRows = rows.filter(r =>
+          new Date(r[0]).getTime() >= cutoff
+        );
 
-      if (recentRows.length >= 2) {
-        // Sum only positive increments; ignore drops from purges/deletes
+        if (recentRows.length < 2) return '-';
+
         let totalCompletions = 0;
         for (let i = 1; i < recentRows.length; i++) {
           const delta = recentRows[i][2] - recentRows[i - 1][2];
           if (delta > 0) totalCompletions += delta;
         }
 
-        // Actual elapsed time between oldest and newest snapshot
         const oldestTime = new Date(recentRows[0][0]).getTime();
         const newestTime = new Date(recentRows[recentRows.length - 1][0]).getTime();
-        const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+        const elapsedDays =
+          Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
 
-        const ratePerDay = (totalCompletions / elapsedDays).toFixed(1);
-        setElemText('kpiVelocitySubtext', '7d Velocity: ~' + ratePerDay + '/day');
-      } else {
-        setElemText('kpiVelocitySubtext', '7d Velocity: Calculating...');
-      }
+        return (totalCompletions / elapsedDays).toFixed(1);
+      };
+
+      setElemText(
+        'kpiVelocitySubtext',
+        '24h: ' + calculate(1) +
+        ' &nbsp; 3d: ' + calculate(3) +
+        ' &nbsp; 7d: ' + calculate(7) + ' /day'
+      );
     }
 
     /**
@@ -703,17 +719,31 @@
         if (showOverdue) avgCols.push(2); // Overdue average
         if (showOpen) avgCols.push(1);     // Open average
         if (showCompleted) avgCols.push(3); // Completed average
-        // Do NOT add average for Severity (it's on a different axis)
+        if (showSeverity) avgCols.push(4); // Severity average
 
-        // Extract raw data for each series and calculate rolling averages
+        // Calculate averages using the same cumulative stacking as the
+        // raw series. This keeps average lines aligned with stack boundaries.
         const seriesData = {};
+        const stackedAverage = new Array(numRows).fill(0);
+
         for (let colIdx of avgCols) {
           const rawValues = [];
           for (let row = 0; row < numRows; row++) {
             const val = dataTable.getValue(row, colIdx);
             rawValues.push(typeof val === 'number' ? val : 0);
           }
-          seriesData[colIdx] = calculateRollingAverage(rawValues, windowSize);
+
+          const average = calculateRollingAverage(rawValues, windowSize);
+
+          if (colIdx === 4) {
+            // Severity is an independent secondary-axis series.
+            seriesData[colIdx] = average;
+          } else {
+            for (let row = 0; row < numRows; row++) {
+              stackedAverage[row] += average[row];
+            }
+            seriesData[colIdx] = stackedAverage.slice();
+          }
         }
 
         // Add rolling average columns to the data table
@@ -741,6 +771,10 @@
           let axisIdx = 0;
           if (colIdx === 2) color = SERIES_COLORS.overdue;
           else if (colIdx === 3) color = SERIES_COLORS.completed;
+          else if (colIdx === 4) {
+            color = SERIES_COLORS.severity;
+            axisIdx = 1;
+          }
 
           seriesConfig[activeSeriesIdx++] = {
             type: 'line', // Critical: lines don't participate in stacking
