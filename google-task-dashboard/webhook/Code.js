@@ -511,6 +511,13 @@ function pruneDataOlderThan1Year() {
 }
 
 /**
+ * Returns the script project ID for admin access link.
+ */
+function getScriptProjectId() {
+  return ScriptApp.getScriptId();
+}
+
+/**
  * Downsamples the last 365 days of snapshot rows to at most 1 entry per
  * rolling 60-minute window, keeping only the latest snapshot in each window.
  * Rows older than 365 days are left untouched (handled separately by
@@ -666,6 +673,13 @@ function downsampleLastYearToHourly() {
   } finally {
     releaseSyncLock();
   }
+}
+
+/**
+ * Returns the script project ID for admin access link.
+ */
+function getScriptProjectId() {
+  return ScriptApp.getScriptId();
 }
 
 /**

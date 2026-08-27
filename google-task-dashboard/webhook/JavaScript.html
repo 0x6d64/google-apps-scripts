@@ -29,6 +29,7 @@
      */
     function init() {
       initNotifications();
+      initAdminLink();
       google.charts.load('current', { packages: ['corechart'] });
       google.charts.setOnLoadCallback(fetchData);
       setupResizeHandler();
@@ -50,6 +51,30 @@
           if (rawData) renderCharts();
         }, 300);
       });
+    }
+
+    /**
+     * Initializes the admin link button with the script project ID.
+     */
+    function initAdminLink() {
+      google.script.run.withSuccessHandler((scriptId) => {
+        const adminBtn = document.getElementById('btnAdmin');
+        if (adminBtn && scriptId) {
+          adminBtn.href = 'https://script.google.com/home/projects/' + scriptId + '/edit';
+        }
+      }).getScriptProjectId();
+    }
+
+    /**
+     * Initializes the admin link button with the script project ID.
+     */
+    function initAdminLink() {
+      google.script.run.withSuccessHandler((scriptId) => {
+        const adminBtn = document.getElementById('btnAdmin');
+        if (adminBtn && scriptId) {
+          adminBtn.href = 'https://script.google.com/home/projects/' + scriptId + '/edit';
+        }
+      }).getScriptProjectId();
     }
 
     /**
@@ -618,6 +643,17 @@
       const showRollingAvg = isChecked('toggleRollingAvg');
 
       // 1. Stacked Lines/Areas on Axis 0 (mutually exclusive segments)
+      // Order: Overdue (base/debt) → On-Time Open → Completed (productive)
+      if (showOverdue) {
+        visibleCols.push(2); // Overdue (base layer)
+        seriesConfig[activeSeriesIdx++] = {
+          type: 'area',
+          targetAxisIndex: 0,
+          color: SERIES_COLORS.overdue,
+          areaOpacity: 0.35,
+          lineWidth: 3
+        };
+      }
       if (showOpen) {
         visibleCols.push(1); // On-Time Open
         seriesConfig[activeSeriesIdx++] = {
@@ -625,16 +661,6 @@
           targetAxisIndex: 0,
           color: SERIES_COLORS.onTimeOpen,
           areaOpacity: 0.25,
-          lineWidth: 3
-        };
-      }
-      if (showOverdue) {
-        visibleCols.push(2); // Overdue
-        seriesConfig[activeSeriesIdx++] = {
-          type: 'area',
-          targetAxisIndex: 0,
-          color: SERIES_COLORS.overdue,
-          areaOpacity: 0.35,
           lineWidth: 3
         };
       }
@@ -668,11 +694,16 @@
         let windowSize = Math.ceil(numRows / 50);
         windowSize = Math.max(2, Math.min(windowSize, 168)); // Clamp: min 2, max 168
 
-        // Add rolling average columns for each visible series
+        // Add rolling average columns for each visible *raw* series (not severity)
+        // Rolling averages should track the raw series they're derived from
         const avgCols = [];
-        for (let i = 1; i < visibleCols.length; i++) {
-          avgCols.push(visibleCols[i]);
-        }
+        // Map: if we added overdue first (base), then open, then completed
+        // We want averages for: overdue (col 2), open (col 1), completed (col 3)
+        // Check which series are visible and add their averages in the same order
+        if (showOverdue) avgCols.push(2); // Overdue average
+        if (showOpen) avgCols.push(1);     // Open average
+        if (showCompleted) avgCols.push(3); // Completed average
+        // Do NOT add average for Severity (it's on a different axis)
 
         // Extract raw data for each series and calculate rolling averages
         const seriesData = {};
@@ -700,6 +731,7 @@
         }
 
         // Add rolling average columns to visible columns and configure their styling
+        // Key: set type to 'line' and ensure they're NOT in the stacking calculation
         for (let colIdx of avgCols) {
           const avgColIdx = avgColMap[colIdx];
           visibleCols.push(avgColIdx);
@@ -709,10 +741,9 @@
           let axisIdx = 0;
           if (colIdx === 2) color = SERIES_COLORS.overdue;
           else if (colIdx === 3) color = SERIES_COLORS.completed;
-          else if (colIdx === 4) { color = SERIES_COLORS.severity; axisIdx = 1; }
 
           seriesConfig[activeSeriesIdx++] = {
-            type: colIdx === 4 ? 'line' : 'line', // All rolling averages as lines
+            type: 'line', // Critical: lines don't participate in stacking
             targetAxisIndex: axisIdx,
             color: color,
             lineWidth: 2,
