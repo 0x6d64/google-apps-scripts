@@ -15,6 +15,23 @@
     let autoFetchTimer = null;
     let lastAutoFetchTime = Date.now();
 
+    // Magic number constants
+    const RESIZE_DEBOUNCE_MS = 300;
+    const STALENESS_UPDATE_INTERVAL_MS = 10 * 1000;
+    const NOTIFICATION_ANIMATION_MS = 250;
+    const NOTIFICATION_DEFAULT_DURATION_MS = 3000;
+    const NOTIFICATION_ERROR_DURATION_MS = 5000;
+    const MS_PER_DAY = 1000 * 60 * 60 * 24;
+    const DOWNSAMPLE_TARGET_BUCKETS = 50;
+    const ROLLING_AVG_WINDOW_MIN = 2;
+    const ROLLING_AVG_WINDOW_MAX = 168;
+    const ROLLING_AVG_TARGET_BUCKETS = 50;
+    const ROLLING_AVG_OPACITY = 0.6;
+    const ROLLING_AVG_LINE_DASH = [5, 5];
+    const VELOCITY_WINDOW_1D = 1;
+    const VELOCITY_WINDOW_3D = 3;
+    const VELOCITY_WINDOW_7D = 7;
+
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
      */
@@ -50,20 +67,8 @@
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
           if (rawData) renderCharts();
-        }, 300);
+        }, RESIZE_DEBOUNCE_MS);
       });
-    }
-
-    /**
-     * Initializes the admin link button with the script project ID.
-     */
-    function initAdminLink() {
-      google.script.run.withSuccessHandler((scriptId) => {
-        const adminBtn = document.getElementById('btnAdmin');
-        if (adminBtn && scriptId) {
-          adminBtn.href = 'https://script.google.com/home/projects/' + scriptId + '/edit';
-        }
-      }).getScriptProjectId();
     }
 
     /**
@@ -86,7 +91,7 @@
         if (lastSnapshotTime) {
           updateStalenessDisplay();
         }
-      }, 10 * 1000); // Update every 10 seconds
+      }, STALENESS_UPDATE_INTERVAL_MS);
     }
 
     /**
@@ -110,7 +115,7 @@
       const intervalSelect = document.getElementById('autoFetchInterval');
       if (intervalSelect) {
         intervalSelect.addEventListener('change', (e) => {
-          autoFetchIntervalMs = Number(e.target.value) * 60 * 1000; // Convert minutes to ms
+          autoFetchIntervalMs = Number(e.target.value) * 60 * 1000; // Convert minutes to ms (constant)
           // Restart timer with new interval if enabled
           if (autoFetchEnabled) {
             stopAutoFetch();
@@ -156,20 +161,24 @@
 
     /**
      * Sets up Page Visibility API to pause/resume auto-fetch when tab is hidden/visible.
+     * On focus regain, fetches immediately if the timer expired during sleep.
      */
     function setupPageVisibilityHandler() {
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
-          // Tab is hidden: pause auto-fetch
+          // Tab is hidden: pause auto-fetch timer
           if (autoFetchEnabled) {
             stopAutoFetch();
           }
         } else {
-          // Tab is visible: resume auto-fetch
+          // Tab is visible: check if fetch is overdue, then restart timer
           if (autoFetchEnabled) {
-            if (Date.now() - lastAutoFetchTime >= autoFetchIntervalMs) {
+            const timeSinceLastFetch = Date.now() - lastAutoFetchTime;
+            if (timeSinceLastFetch >= autoFetchIntervalMs) {
+              // Fetch immediately since timer expired
               performAutoFetch();
             }
+            // (Re)start timer for future fetches
             startAutoFetch();
           }
         }
@@ -212,7 +221,7 @@
       if (dismissBtn) {
         dismissBtn.addEventListener('click', () => {
           bubble.classList.add('dismissing');
-          setTimeout(() => bubble.remove(), 250);
+          setTimeout(() => bubble.remove(), NOTIFICATION_ANIMATION_MS);
         });
       }
 
@@ -227,7 +236,7 @@
         setTimeout(() => {
           if (bubble.parentElement) {
             bubble.classList.add('dismissing');
-            setTimeout(() => bubble.remove(), 250);
+            setTimeout(() => bubble.remove(), NOTIFICATION_ANIMATION_MS);
           }
         }, durationMs);
       }
@@ -281,7 +290,7 @@
     function onDataError(err) {
       const msg = (err && (err.message || err.toString())) || 'Unknown server error';
       showStatus('Operation failed: ' + msg, 'error');
-      showNotification(`Error\n${msg}`, '❌', 'error', 5000);
+      showNotification(`Error\n${msg}`, '❌', 'error', NOTIFICATION_ERROR_DURATION_MS);
     }
 
     /**
@@ -371,7 +380,7 @@
       const now = Date.now();
       const cutoff = rangeDays === 'all'
         ? null
-        : new Date(now - (Number(rangeDays) || 30) * 24 * 60 * 60 * 1000);
+        : new Date(now - (Number(rangeDays) || 30) * MS_PER_DAY);
 
       const windowRows = rows.filter(r => {
         if (!cutoff) return true;
@@ -387,7 +396,7 @@
 
       const oldestTime = new Date(windowRows[0][0]).getTime();
       const newestTime = new Date(windowRows[windowRows.length - 1][0]).getTime();
-      const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+      const elapsedDays = Math.max(1, newestTime - oldestTime) / MS_PER_DAY;
 
       // Addition rate = (open_start - open_end + completed) / days
       const additionRate = (oldestOpen - newestOpen + completedInPeriod) / elapsedDays;
@@ -420,7 +429,7 @@
       const now = Date.now();
       const cutoff = rangeDays === 'all'
         ? null
-        : new Date(now - (Number(rangeDays) || 30) * 24 * 60 * 60 * 1000);
+        : new Date(now - (Number(rangeDays) || 30) * MS_PER_DAY);
 
       const windowRows = rows.filter(r => {
         if (!cutoff) return true;
@@ -433,7 +442,7 @@
       const completions = calculateCompletionsInWindow(windowRows);
       const oldestTime = new Date(windowRows[0][0]).getTime();
       const newestTime = new Date(windowRows[windowRows.length - 1][0]).getTime();
-      const elapsedDays = Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+      const elapsedDays = Math.max(1, newestTime - oldestTime) / MS_PER_DAY;
 
       return completions / elapsedDays;
     }
@@ -500,14 +509,13 @@
     }
 
     /**
-     * Calculates completion throughput velocity over 7-day window.
+     * Calculates completion throughput velocity over 3 time windows.
      * Sums only positive increments between snapshots to survive purges/deletes.
-     * Uses actual elapsed time between oldest and newest snapshots.
      * @param {Array<Array<any>>} rows
      */
     function calculateVelocity(rows) {
       const calculate = (days) => {
-        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        const cutoff = Date.now() - days * MS_PER_DAY;
         const recentRows = rows.filter(r =>
           new Date(r[0]).getTime() >= cutoff
         );
@@ -522,17 +530,16 @@
 
         const oldestTime = new Date(recentRows[0][0]).getTime();
         const newestTime = new Date(recentRows[recentRows.length - 1][0]).getTime();
-        const elapsedDays =
-          Math.max(1, newestTime - oldestTime) / (1000 * 60 * 60 * 24);
+        const elapsedDays = Math.max(1, newestTime - oldestTime) / MS_PER_DAY;
 
         return (totalCompletions / elapsedDays).toFixed(1);
       };
 
       setElemText(
         'kpiVelocitySubtext',
-        '24h: ' + calculate(1) +
-        ' &nbsp; 3d: ' + calculate(3) +
-        ' &nbsp; 7d: ' + calculate(7) + ' /day'
+        '24h: ' + calculate(VELOCITY_WINDOW_1D) +
+        ' &nbsp; 3d: ' + calculate(VELOCITY_WINDOW_3D) +
+        ' &nbsp; 7d: ' + calculate(VELOCITY_WINDOW_7D) + ' /day'
       );
     }
 
@@ -578,7 +585,7 @@
      * @param {number} targetBuckets - Target number of buckets (default 50)
      * @returns {Array<Array<any>>} - Downsampled rows
      */
-    function downsampleData(rows, targetBuckets = 50) {
+    function downsampleData(rows, targetBuckets = DOWNSAMPLE_TARGET_BUCKETS) {
       if (rows.length <= targetBuckets) return rows;
 
       const bucketSize = Math.ceil(rows.length / targetBuckets);
@@ -610,28 +617,6 @@
         result.push(avg);
       }
       return result;
-    }
-
-    /**
-     * Downsamples data to reduce rendered points while preserving trend.
-     * Uses binning: groups consecutive rows into buckets and keeps the latest in each bucket.
-     * @param {Array<Array<any>>} rows - Array of snapshot rows [timestamp, open, completed, overdue, severity]
-     * @param {number} targetBuckets - Target number of buckets (default 50)
-     * @returns {Array<Array<any>>} - Downsampled rows
-     */
-    function downsampleData(rows, targetBuckets = 50) {
-      if (rows.length <= targetBuckets) return rows;
-
-      const bucketSize = Math.ceil(rows.length / targetBuckets);
-      const downsampled = [];
-
-      for (let i = 0; i < rows.length; i += bucketSize) {
-        const bucket = rows.slice(i, i + bucketSize);
-        // Keep the latest (last) row in each bucket
-        downsampled.push(bucket[bucket.length - 1]);
-      }
-
-      return downsampled;
     }
 
     /**
@@ -707,66 +692,91 @@
       if (showRollingAvg && visibleCols.length > 1) {
         // Compute window size based on data points
         const numRows = dataTable.getNumberOfRows();
-        let windowSize = Math.ceil(numRows / 50);
-        windowSize = Math.max(2, Math.min(windowSize, 168)); // Clamp: min 2, max 168
+        let windowSize = Math.ceil(numRows / ROLLING_AVG_TARGET_BUCKETS);
+        windowSize = Math.max(ROLLING_AVG_WINDOW_MIN, Math.min(windowSize, ROLLING_AVG_WINDOW_MAX));
 
-        // Add rolling average columns for each visible *raw* series (not severity)
-        // Rolling averages should track the raw series they're derived from
-        const avgCols = [];
-        // Map: if we added overdue first (base), then open, then completed
-        // We want averages for: overdue (col 2), open (col 1), completed (col 3)
-        // Check which series are visible and add their averages in the same order
-        if (showOverdue) avgCols.push(2); // Overdue average
-        if (showOpen) avgCols.push(1);     // Open average
-        if (showCompleted) avgCols.push(3); // Completed average
-        if (showSeverity) avgCols.push(4); // Severity average
-
-        // Calculate averages using the same cumulative stacking as the
-        // raw series. This keeps average lines aligned with stack boundaries.
-        const seriesData = {};
-        const stackedAverage = new Array(numRows).fill(0);
-
-        for (let colIdx of avgCols) {
-          const rawValues = [];
+        // Calculate raw rolling averages for each visible series
+        const rawAverages = {};
+        
+        if (showOverdue) {
+          const rawVals = [];
           for (let row = 0; row < numRows; row++) {
-            const val = dataTable.getValue(row, colIdx);
-            rawValues.push(typeof val === 'number' ? val : 0);
+            rawVals.push(typeof dataTable.getValue(row, 2) === 'number' ? dataTable.getValue(row, 2) : 0);
           }
-
-          const average = calculateRollingAverage(rawValues, windowSize);
-
-          if (colIdx === 4) {
-            // Severity is an independent secondary-axis series.
-            seriesData[colIdx] = average;
-          } else {
-            for (let row = 0; row < numRows; row++) {
-              stackedAverage[row] += average[row];
-            }
-            seriesData[colIdx] = stackedAverage.slice();
+          rawAverages[2] = calculateRollingAverage(rawVals, windowSize);
+        }
+        
+        if (showOpen) {
+          const rawVals = [];
+          for (let row = 0; row < numRows; row++) {
+            rawVals.push(typeof dataTable.getValue(row, 1) === 'number' ? dataTable.getValue(row, 1) : 0);
           }
+          rawAverages[1] = calculateRollingAverage(rawVals, windowSize);
+        }
+        
+        if (showCompleted) {
+          const rawVals = [];
+          for (let row = 0; row < numRows; row++) {
+            rawVals.push(typeof dataTable.getValue(row, 3) === 'number' ? dataTable.getValue(row, 3) : 0);
+          }
+          rawAverages[3] = calculateRollingAverage(rawVals, windowSize);
+        }
+        
+        if (showSeverity) {
+          const rawVals = [];
+          for (let row = 0; row < numRows; row++) {
+            rawVals.push(typeof dataTable.getValue(row, 4) === 'number' ? dataTable.getValue(row, 4) : 0);
+          }
+          rawAverages[4] = calculateRollingAverage(rawVals, windowSize);
+        }
+
+        // Apply cumulative stacking to non-severity averages
+        // Stack order: Overdue (base) → On-Time Open → Completed
+        // stackBase accumulates RAW averages only (not the already-stacked
+        // result), otherwise each layer double-counts everything beneath it.
+        const stackedAverages = {};
+        let stackBase = new Array(numRows).fill(0);
+
+        if (showOverdue) {
+          stackedAverages[2] = rawAverages[2].map((val, i) => stackBase[i] + val);
+          stackBase = stackBase.map((val, i) => val + rawAverages[2][i]);
+        }
+        
+        if (showOpen) {
+          stackedAverages[1] = rawAverages[1].map((val, i) => stackBase[i] + val);
+          stackBase = stackBase.map((val, i) => val + rawAverages[1][i]);
+        }
+        
+        if (showCompleted) {
+          stackedAverages[3] = rawAverages[3].map((val, i) => stackBase[i] + val);
+        }
+        
+        // Severity remains independent (not stacked)
+        if (showSeverity) {
+          stackedAverages[4] = rawAverages[4];
         }
 
         // Add rolling average columns to the data table
         const colCount = dataTable.getNumberOfColumns();
-        const avgColMap = {}; // Map original col index to new avg col index
+        const avgColMap = {};
+        const orderedCols = [2, 1, 3, 4].filter(c => rawAverages[c]);
 
-        for (let colIdx of avgCols) {
+        for (let i = 0; i < orderedCols.length; i++) {
+          const colIdx = orderedCols[i];
           dataTable.addColumn('number', 'Avg ' + dataTable.getColumnLabel(colIdx));
-          avgColMap[colIdx] = colCount + avgCols.indexOf(colIdx);
+          avgColMap[colIdx] = colCount + i;
 
-          // Populate the rolling average column
+          // Populate with stacked average values
           for (let row = 0; row < numRows; row++) {
-            dataTable.setValue(row, dataTable.getNumberOfColumns() - 1, seriesData[colIdx][row]);
+            dataTable.setValue(row, avgColMap[colIdx], stackedAverages[colIdx][row]);
           }
         }
 
-        // Add rolling average columns to visible columns and configure their styling
-        // Key: set type to 'line' and ensure they're NOT in the stacking calculation
-        for (let colIdx of avgCols) {
+        // Add rolling average columns to visible columns and configure styling
+        for (let colIdx of orderedCols) {
           const avgColIdx = avgColMap[colIdx];
           visibleCols.push(avgColIdx);
 
-          // Determine color based on original series
           let color = SERIES_COLORS.onTimeOpen;
           let axisIdx = 0;
           if (colIdx === 2) color = SERIES_COLORS.overdue;
@@ -781,22 +791,26 @@
             targetAxisIndex: axisIdx,
             color: color,
             lineWidth: 2,
-            lineDashStyle: [5, 5], // Dotted line
+            lineDashStyle: ROLLING_AVG_LINE_DASH,
             pointSize: 0,
-            opacity: 0.6
+            opacity: ROLLING_AVG_OPACITY
           };
         }
       }
 
       if (visibleCols.length === 1) {
         chartContainer.innerHTML = '<div class="loading-spinner">Select at least one metric series above to render chart.</div>';
+        mainChartInstance = null;
         return;
       }
 
-      if (chartContainer.querySelector('.loading-spinner')) {
-        chartContainer.innerHTML = '';
-        mainChartInstance = null;
-      }
+      // Always recreate the chart instance before drawing. Reusing a ComboChart
+      // instance across renders with a different series count/config can leave
+      // stale series definitions cached internally, causing the chart to appear
+      // unchanged until an unrelated structural change (e.g. adding trend-line
+      // columns) forces a full redraw. Clearing and recreating avoids this.
+      chartContainer.innerHTML = '';
+      mainChartInstance = new google.visualization.ComboChart(chartContainer);
 
       dataView.setColumns(visibleCols);
 
@@ -852,7 +866,7 @@
       const now = Date.now();
       const cutoff = activeRangeDays === 'all'
         ? null
-        : new Date(now - (Number(activeRangeDays) || 30) * 24 * 60 * 60 * 1000);
+        : new Date(now - (Number(activeRangeDays) || 30) * MS_PER_DAY);
 
       const validRows = [];
       for (let i = 0; i < rawData.rows.length; i++) {
@@ -876,7 +890,7 @@
       }
 
       // Apply downsampling for large datasets
-      const downsampledRows = downsampleData(validRows);
+      const downsampledRows = downsampleData(validRows, DOWNSAMPLE_TARGET_BUCKETS);
       dataTable.addRows(downsampledRows);
       return dataTable;
     }
@@ -892,6 +906,12 @@
       pills.forEach(p => {
         p.classList.toggle('active', p.getAttribute('data-range') === String(range));
       });
+
+      // Recalculate KPIs (velocity, backlog estimate) when range changes
+      if (rawData && rawData.rows && rawData.rows.length > 0) {
+        calculateVelocity(rawData.rows);
+        updateBacklogEstimate(rawData.rows);
+      }
 
       renderCharts();
     }
