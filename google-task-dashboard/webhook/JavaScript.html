@@ -374,33 +374,55 @@
      * @param {number|string} rangeDays - Selected range (3, 7, 14, 30, or 'all')
      * @return {number} - Tasks added per day
      */
-    function calculateAdditionRate(rows, rangeDays) {
-      if (!rows || rows.length < 2) return 0;
+    /**
+     * Filters rows to a time window without modifying the original array.
+     * @param {Array<Array<any>>} rows - All snapshot rows
+     * @param {number|string} rangeDays - Range (3, 7, 14, 30, or 'all')
+     * @return {Array<Array<any>>} - Filtered rows in the window
+     */
+    function getWindowRows(rows, rangeDays) {
+      if (!rows) return [];
 
       const now = Date.now();
       const cutoff = rangeDays === 'all'
         ? null
         : new Date(now - (Number(rangeDays) || 30) * MS_PER_DAY);
 
-      const windowRows = rows.filter(r => {
+      return rows.filter(r => {
         if (!cutoff) return true;
         const t = new Date(r[0]).getTime();
         return t >= cutoff.getTime();
       });
+    }
 
-      if (windowRows.length < 2) return 0;
+    /**
+     * Calculates total tasks added in a window using addition formula.
+     * @param {Array<Array<any>>} windowRows - Rows filtered to the window
+     * @return {number} - Tasks added in the period
+     */
+    function calculateTasksAdded(windowRows) {
+      if (!windowRows || windowRows.length < 2) return 0;
 
       const oldestOpen = typeof windowRows[0][1] === 'number' ? windowRows[0][1] : 0;
       const newestOpen = typeof windowRows[windowRows.length - 1][1] === 'number' ? windowRows[windowRows.length - 1][1] : 0;
       const completedInPeriod = calculateCompletionsInWindow(windowRows);
 
+      // Tasks added = (open_start - open_end + completed)
+      return Math.max(0, oldestOpen - newestOpen + completedInPeriod);
+    }
+
+    function calculateAdditionRate(rows, rangeDays) {
+      if (!rows || rows.length < 2) return 0;
+
+      const windowRows = getWindowRows(rows, rangeDays);
+      if (windowRows.length < 2) return 0;
+
+      const tasksAdded = calculateTasksAdded(windowRows);
       const oldestTime = new Date(windowRows[0][0]).getTime();
       const newestTime = new Date(windowRows[windowRows.length - 1][0]).getTime();
       const elapsedDays = Math.max(1, newestTime - oldestTime) / MS_PER_DAY;
 
-      // Addition rate = (open_start - open_end + completed) / days
-      const additionRate = (oldestOpen - newestOpen + completedInPeriod) / elapsedDays;
-      return Math.max(0, additionRate);
+      return tasksAdded / elapsedDays;
     }
 
     /**
@@ -492,11 +514,14 @@
         estCard.style.display = 'block';
         const label = document.getElementById('backlogEstimateValue');
         const note = document.getElementById('backlogEstimateNote');
+        const counts = document.getElementById('backlogCountsNote');
+        
         if (label) {
           label.textContent = estimate;
           // Use a smaller font for text-based values so they fit on one line
           label.classList.toggle('value-compact', isNaN(Number(estimate)));
         }
+        
         if (note) {
           if (estimate === 'Cannot estimate') {
             note.textContent = 'Adding ~' + additionRate.toFixed(1) + '/day vs completing ~' + completionRate.toFixed(1) + '/day';
@@ -504,6 +529,17 @@
             const rangeLabel = activeRangeDays === 'all' ? 'all time' : activeRangeDays + ' days';
             note.textContent = 'Based on rates over past ' + rangeLabel;
           }
+        }
+        
+        // Display raw counts only when completion rate > addition rate and open > 0
+        if (counts && completionRate > additionRate && currentOpen > 0) {
+          const windowRows = getWindowRows(rows, activeRangeDays);
+          const tasksAdded = calculateTasksAdded(windowRows);
+          const tasksCompleted = calculateCompletionsInWindow(windowRows);
+          counts.textContent = tasksAdded + ' added / ' + tasksCompleted + ' completed this period';
+          counts.style.display = 'block';
+        } else if (counts) {
+          counts.style.display = 'none';
         }
       }
     }
@@ -945,6 +981,21 @@
     }
 
     /**
+     * Internal helper: refresh dashboard data from Sheet.
+     * Used by destructive actions to auto-refresh without user click.
+     */
+    function refreshDashboardData() {
+      google.script.run
+        .withSuccessHandler((data) => {
+          onDataLoaded(data);
+        })
+        .withFailureHandler((err) => {
+          console.error('Auto-refresh error:', err);
+        })
+        .getDashboardData();
+    }
+
+    /**
      * Triggers Manual Sync Now RPC with UI lock.
      */
     function handleSyncNow() {
@@ -1067,7 +1118,7 @@
           showPruneResultModal(result);
           showStatus('Pruning complete. Refreshing dashboard...', 'success');
           showNotification(`Pruned ${result.totalPruned} rows\nReduced to 1/day`, '🧹', 'success', 4000);
-          fetchData();
+          refreshDashboardData();
         })
         .withFailureHandler((err) => {
           setButtonsDisabled(false);
@@ -1102,7 +1153,7 @@
           showDownsampleResultModal(result);
           showStatus('Downsampling complete. Refreshing dashboard...', 'success');
           showNotification(`Removed ${result.totalRemoved} rows\nReduced to 1/hour`, '📉', 'success', 4000);
-          fetchData();
+          refreshDashboardData();
         })
         .withFailureHandler((err) => {
           setButtonsDisabled(false);
