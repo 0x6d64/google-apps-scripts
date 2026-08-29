@@ -8,6 +8,8 @@ const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
 const SYNC_LOCK_COOLDOWN_MS = 10000; // 10 seconds debounce lock
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
 const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
+const OVERDUE_HOUR = 21;
+const DEFAULT_TIMEZONE = 'Europe/Bucharest';
 
 /**
  * Serves the web dashboard HTML interface.
@@ -98,12 +100,53 @@ function getSpreadsheetUrl() {
  */
 function getTaskWeight(title) {
   if (!title || typeof title !== 'string') return 1;
-  
+
   const match = title.match(/^!{1,4}/);
   if (!match) return 1;
-  
+
   const prefixLen = match[0].length;
   return prefixLen + 1; // 1 "!" → 2, 2 "!" → 3, etc.
+}
+
+/**
+ * Retrieves timezone from account settings with fallback to default.
+ * @return {string} - IANA timezone string
+ */
+function getTimezone() {
+  try {
+    return Session.getScriptTimeZone();
+  } catch (e) {
+    return DEFAULT_TIMEZONE;
+  }
+}
+
+/**
+ * Calculates the UTC time corresponding to overdueHour:00:00 on a given calendar date
+ * in the specified timezone.
+ * @param {string} dueDateStr - Calendar date in YYYY-MM-DD format (from Tasks API)
+ * @param {string} timezone - IANA timezone string (e.g., 'Europe/Bucharest')
+ * @param {number} overdueHour - Hour of day (0-23) when task becomes overdue in target timezone
+ * @return {Date} - UTC time representing that deadline
+ */
+function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
+  const parts = dueDateStr.split('-');
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const day = parseInt(parts[2], 10);
+
+  // Find which UTC hour on this date corresponds to overdueHour in the target timezone
+  for (let utcHour = 0; utcHour < 24; utcHour++) {
+    const candidateUTC = new Date(Date.UTC(year, month, day, utcHour, 0, 0));
+    const formattedInTZ = Utilities.formatDate(candidateUTC, timezone, 'HH:mm');
+    const [tzHour] = formattedInTZ.split(':').map(Number);
+
+    if (tzHour === overdueHour) {
+      return candidateUTC;
+    }
+  }
+
+  // Fallback (should not reach here for valid inputs)
+  return new Date(Date.UTC(year, month, day, overdueHour, 0, 0));
 }
 
 function ingestTaskMetrics() {
@@ -162,19 +205,24 @@ function ingestTaskMetrics() {
             // No due date: always count as open
             totalOpen += weight;
           } else {
-            const dueDate = new Date(task.due);
-            if (!isNaN(dueDate.getTime())) {
-              // Exclude tasks due more than 6 months in the future
-              if (dueDate <= sixMonthsCutoff) {
+            // task.due is calendar date in YYYY-MM-DD format
+            const dueDateStr = task.due;
+            const dueDateObj = new Date(dueDateStr);
+
+            if (!isNaN(dueDateObj.getTime())) {
+              // Exclude tasks due more than 6 months in the future (calendar date comparison)
+              if (dueDateObj <= sixMonthsCutoff) {
                 totalOpen += weight;
-                // Calculate overdue only for tasks with due dates in the past
-                if (dueDate < now) {
+
+                // Calculate overdue based on calendar date and OVERDUE_HOUR deadline in configured timezone
+                const timezone = getTimezone();
+                const overdueDeadline = getOverdueDeadline(dueDateStr, timezone, OVERDUE_HOUR);
+
+                if (now >= overdueDeadline) {
+                  // Task is overdue
                   totalOverdue += weight;
-                  const diffMs = now.getTime() - dueDate.getTime();
-                  const daysOverdue = Math.max(
-                    0,
-                    diffMs / (1000 * 60 * 60 * 24)
-                  );
+                  const diffMs = now.getTime() - overdueDeadline.getTime();
+                  const daysOverdue = diffMs / (1000 * 60 * 60 * 24);
                   totalOverdueSeverity += weight * Math.sqrt(daysOverdue);
                 }
               }

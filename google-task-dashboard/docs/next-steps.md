@@ -138,29 +138,37 @@ and return before/after/removal statistics.
 
 ### 6. Rework overdue calculation
 
-📋 **Planned**
+✅ **Done**
 
-**Implementation:** Replace the current timestamp-based overdue calculation
-with calendar-date-based overdue handling. Google Tasks does not expose the
-time-of-day component of due dates through the Tasks API, so a dated task is
-considered overdue starting at 21:00 on its due calendar date, using the Apps
-Script project timezone. Apply this definition consistently to the aggregate
-overdue count, overdue severity, and individual overdue tasks.
+**Implementation:** Replaced timestamp-based overdue calculation with 
+calendar-date-based overdue handling. Tasks are overdue starting at 
+OVERDUE_HOUR (configurable constant, default 21:00) on their due calendar 
+date, using the account's timezone from Apps Script project settings. 
+Applied consistently to aggregate overdue count and severity.
 
 **Changes:**
 
-- Define the effective overdue deadline as 21:00 on the task's due date.
-- Use the Apps Script project timezone for date and time comparisons.
-- Treat tasks due today as not overdue before 21:00.
-- Treat tasks due on earlier calendar dates as overdue.
-- Keep tasks without a due date out of overdue calculations.
-- Rework `overdue` calculation to use the effective deadline.
-- Rework `overdue_severity` calculation to use the new overdue duration.
-- Ensure individual task severity uses the identical calculation.
-- Validate due today before/at/after 21:00, yesterday, future dates, and
-  undated tasks.
+- Define effective overdue deadline as OVERDUE_HOUR:00 on task's due date (YYYY-MM-DD).
+- Read timezone from `Session.getScriptTimeZone()` with fallback to `DEFAULT_TIMEZONE`.
+- `OVERDUE_HOUR` is a module-level constant (line 11, currently 21).
+- Helper function `getOverdueDeadline(dueDateStr, timezone, overdueHour)` 
+  calculates UTC deadline by iterating UTC hours 0–23 and finding which maps 
+  to OVERDUE_HOUR in target timezone.
+- Tasks due today are not overdue before 21:00; overdue at/after 21:00.
+- Tasks due on earlier calendar dates are overdue.
+- Tasks without due date excluded from overdue count.
+- Severity recalculates per snapshot: `weight * sqrt(daysOverdue)` from 
+  deadline to snapshot time, drifting forward as snapshots age.
+- No property storage; timezone auto-detected from account.
 
-**Files:** requirements.md, Code.js
+**Test cases covered:**
+- Today before 21:00 → not overdue
+- Today at/after 21:00 → overdue (severity ≥ 0)
+- Yesterday → overdue with severity ≥ 1
+- Earlier dates → overdue with increasing severity
+- No due date → excluded
+
+**Files:** Code.js
 
 **Effort:** M
 
