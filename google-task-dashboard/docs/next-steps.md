@@ -73,4 +73,10 @@ When editing this doc, use the following guidelines:
 
 ## Feature requests
 
-<!-- Append new requests below. One bullet per request. -->
+- when ingesting tasks from the Tasks API, the descriptions shall be parsed. I
+  want to use a prefix of `!` characters to mark a task as more important, the
+  tasks marked like that shall count as 2, 3, 4, ... tasks. the logic shall be
+  as follows: no prefix: counts as 1. Prefix `!`: counts as 2. Prefix `!!`:
+  counts as 3, and so on (up to 4 times the `!` prefix that counts as 5). the
+  prefix shall only be found if its at the beginning of the description. the
+  prefix shall influence all metrics (including overdue and completion rate).
