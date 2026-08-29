@@ -23,21 +23,21 @@
       </div>
 
       <div class="header-actions">
+        <a id="btnAdmin" href="#" target="_blank" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
+          <span class="btn-icon">⚙️</span> Admin
+        </a>
         <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
           <span class="btn-icon">📊</span> View Sheet
         </a>
         <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
           <span class="btn-icon">🔗</span> Launch Google Tasks
         </a>
-        <button id="btnReloadData" class="btn btn-secondary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
-          <span class="btn-icon">🔄</span> Fetch Data From Sheet
-        </button>
-        <button id="btnSyncNow" class="btn btn-primary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
+        <button id="btnSyncNow" class="btn btn-secondary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
           <span class="btn-icon">⚡</span> Ingest From Tasks
         </button>
-        <a id="btnAdmin" href="#" target="_blank" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
-          <span class="btn-icon">⚙️</span> Admin
-        </a>
+        <button id="btnReloadData" class="btn btn-primary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
+          <span class="btn-icon">🔄</span> Fetch Data From Sheet
+        </button>
       </div>
     </header>
 
