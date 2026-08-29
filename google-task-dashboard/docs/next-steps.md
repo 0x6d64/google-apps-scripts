@@ -103,6 +103,39 @@ When editing this doc, use the following guidelines:
 
 ---
 
+### 5. Adaptive historical snapshot downsampling
+
+📋 **planned**
+
+**Implementation:** Replace the current uniform hourly downsampling with a
+configurable age-based policy. Define three categories: Recent (0–3 days,
+maximum 1 sample per `RECENT_INTERVAL_MINUTES`), Near-term (>3–7 days, maximum 1
+sample per `NEAR_TERM_INTERVAL_MINUTES`), and Historical (>7–365 days, maximum 1
+sample per `HISTORICAL_INTERVAL_HOURS`). Use the following explicit parameters:
+
+* `RECENT_MAX_AGE_DAYS = 3`
+* `RECENT_INTERVAL_MINUTES = 30`
+* `NEAR_TERM_MAX_AGE_DAYS = 7`
+* `NEAR_TERM_INTERVAL_MINUTES = 60`
+* `HISTORICAL_MAX_AGE_DAYS = 365`
+* `HISTORICAL_INTERVAL_HOURS = 3`
+
+Within each rolling interval, retain the latest snapshot and do not create or
+interpolate missing data. Data older than `HISTORICAL_MAX_AGE_DAYS` is not
+affected. Read-only rows within the affected `HISTORICAL_MAX_AGE_DAYS` range
+where practical, leaving older rows untouched. Preserve chronological ordering
+and return before/after/removal statistics.
+
+**Changes:**
+
+* [pending implementation]
+
+**Files:** requirements.md, Code.js, Index.html
+
+**Effort:** M
+
+---
+
 ## Feature requests
 
 <!-- Append new requests below. One bullet per request. -->
