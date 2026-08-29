@@ -107,6 +107,13 @@ auth = sufficient security.
 
 - **Velocity**: naive `newest - oldest` breaks across purges (count can
   drop). Always sum positive deltas between consecutive snapshots only.
+- **Weighted task-priority velocity** (`!`, `!!`, `!!!`, `!!!!` prefixes):
+  weight = prefix_count + 1 (no prefix → 1, `!` → 2, `!!` → 3, `!!!` → 4,
+  `!!!!` → 5). Calculated live during ingestion by summing
+  `getTaskWeight(title)` for each completed task. Weighted velocity available
+  only for current session (most recent ingestion); historical snapshots
+  silently fall back to unweighted velocity since spreadsheet stores only
+  aggregate completed count, not per-task weights. No schema changes.
 - **Stacked average double-counting**: when accumulating a running
   `stackBase` across layers, add the *raw* per-layer average each time —
   not the already-stacked cumulative value. Adding the stacked value back
@@ -116,12 +123,54 @@ auth = sufficient security.
   rather than reusing one across draws with changing series/column counts.
   Reuse can leave stale series config cached, so toggles only visibly apply
   after an unrelated structural change (e.g. adding trend columns).
-- **Weighted task-priority velocity** (`!`, `!!`, `!!!` prefixes): evaluated
-  and explicitly abandoned. Not implemented.
 - **Auto-fetch never triggers Tasks API** — only reads Sheet via
   `getDashboardData()`. Keeps background polling free.
 - Historical Sheet rows are immutable snapshots; deleting/purging tasks
   never rewrites past rows, only affects the next snapshot's counts.
+
+---
+
+## Next implementation items
+
+### 1. Display task addition and completion counts alongside backlog ETA
+
+**Goal:** Show raw completion + addition numbers in KPI section when
+backlog is converging (completion_rate > addition_rate, open > 0).
+
+**Approach:**
+- Reuse existing `calculateAdditionRate()` and `calculateCompletionRate()`
+  functions. Extract the raw counts in the selected window:
+  `tasksAdded = (open_start - open_end + completed_in_period)`
+  `tasksCompleted = sum of positive completion deltas`
+- Add two new KPI display lines in the Backlog ETA card: "X added / Y
+  completed this period"
+- Update on range change (same as ETA estimate).
+- Hide when estimate is hidden.
+
+**Files:** Index.html (add display lines), JavaScript.html (extract counts,
+add to display logic)
+
+**Effort:** S
+
+---
+
+### 2. Auto-refresh dashboard after any destructive sheet action
+
+**Goal:** Every action modifying the Google Sheet (ingest, purge, delete old,
+downsample, prune) automatically fetches latest data without user clicking
+"Fetch Data From Sheet".
+
+**Approach:**
+- After each backend call that writes to Sheet (`syncNow()`, `syncAndClearTasks()`,
+  `deleteTasksCompletedOlderThan()`, `downsampleLastYearToHourly()`,
+  `pruneDataOlderThan1Year()`), chain a `getDashboardData()` call client-side
+  before showing success notification.
+- Update `onDataLoaded()` to refresh both chart and KPIs.
+- No backend changes needed; client-side fetch is free (no Tasks API call).
+
+**Files:** JavaScript.html (action handlers)
+
+**Effort:** S
 
 ---
 
