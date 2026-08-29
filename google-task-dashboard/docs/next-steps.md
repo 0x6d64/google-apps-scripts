@@ -159,6 +159,92 @@ before today; explicitly timed tasks continue to use the exact due timestamp.
 
 ---
 
+### 7. Adaptive historical snapshot downsampling
+
+📋 **Planned**
+
+**Implementation:** Replace the current uniform hourly downsampling with a
+configurable age-based policy. Define three categories: Recent (0–3 days,
+maximum 1 sample per 30 minutes), Near-term (>3–7 days, maximum 1 sample per
+1 hour), and Historical (>7–365 days, maximum 1 sample per 3 hours). Use the
+following explicit parameters:
+
+- `RECENT_MAX_AGE_DAYS = 3`
+- `RECENT_INTERVAL_MINUTES = 30`
+- `NEAR_TERM_MAX_AGE_DAYS = 7`
+- `NEAR_TERM_INTERVAL_MINUTES = 60`
+- `HISTORICAL_MAX_AGE_DAYS = 365`
+- `HISTORICAL_INTERVAL_HOURS = 3`
+
+Within each rolling interval, retain the latest snapshot and do not create or
+interpolate missing data. Data older than `HISTORICAL_MAX_AGE_DAYS` is not
+affected. Read only rows within the affected `HISTORICAL_MAX_AGE_DAYS` range
+where practical, leaving older rows untouched. Preserve chronological
+ordering and return before/after/removal statistics.
+
+**Changes:**
+
+- [pending implementation]
+
+**Files:** requirements.md, Code.js, Index.html
+
+**Effort:** M
+
+
+### 8. Add top 3 overdue tasks
+
+📋 **Planned**
+
+**Implementation:** During the existing Tasks API ingestion, identify the
+three currently open tasks with the greatest overdue duration. Calculate
+individual overdue severity using the same `sqrt(days_overdue)` formula as
+the aggregate overdue severity metric. Store the resulting Top 3 as
+non-authoritative current state in Apps Script `CacheService` with a 6-hour
+expiration. The dashboard reads the cached data without making additional
+Tasks API requests. If the cache is unavailable or expired, hide the section
+until the next successful ingestion.
+
+**Changes:**
+
+- Calculate and maintain the three most overdue tasks during ingestion.
+- Include task ID, title, due date, overdue duration, and individual severity.
+- Store Top 3 data in script-level `CacheService`.
+- Read Top 3 data as part of the dashboard data request.
+- Hide the Top 3 section when no cached data is available or no overdue tasks
+  exist.
+- Do not add Top 3 task data to the historical snapshot sheet.
+
+**Files:** requirements.md, Code.js, JavaScript.html
+
+**Effort:** M
+
+
+### 9. Improve dashboard KPI and overdue-task layout
+
+📋 **Planned**
+
+**Implementation:** Visually distinguish the Backlog ETA KPI from the
+Overdue KPI by using an indigo/blue color rather than the existing overdue
+red. Add a compact full-width Top 3 Overdue section below the KPI cards and
+above the chart controls. Display task title, overdue duration, and
+individual overdue severity for each item, with an "Open Google Tasks"
+action. Keep the section compact and hide it when there are no overdue tasks.
+
+**Changes:**
+
+- Change Backlog ETA card color to a neutral indigo/blue treatment.
+- Add compact Top 3 Overdue section below the KPI cards.
+- Display title, overdue duration, and severity columns.
+- Add "Open Google Tasks" action.
+- Remove the task-metrics explanatory note from the dashboard.
+- Ensure the layout remains compact and responsive.
+
+**Files:** requirements.md, Index.html, Styles.html
+
+**Effort:** M
+
+---
+
 ## Feature requests
 
 - ensure that 
