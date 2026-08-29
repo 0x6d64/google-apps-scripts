@@ -89,6 +89,23 @@ function getSpreadsheetUrl() {
  * Handles rate limits, null checks on response items, and locks.
  * @return {Object} The freshly calculated snapshot metrics
  */
+/**
+ * Extracts task weight from title prefix.
+ * Prefix rules: no prefix = 1, "!" = 2, "!!" = 3, "!!!" = 4, "!!!!" = 5.
+ * Prefix must be at the beginning of the title only.
+ * @param {string} title - Task title
+ * @return {number} - Weight (1-5)
+ */
+function getTaskWeight(title) {
+  if (!title || typeof title !== 'string') return 1;
+  
+  const match = title.match(/^!{1,4}/);
+  if (!match) return 1;
+  
+  const prefixLen = match[0].length;
+  return prefixLen + 1; // 1 "!" → 2, 2 "!" → 3, etc.
+}
+
 function ingestTaskMetrics() {
   const now = new Date();
   const sixMonthsCutoff = new Date(now);
@@ -135,28 +152,30 @@ function ingestTaskMetrics() {
         const task = tasks[j];
         if (!task) continue;
 
+        const weight = getTaskWeight(task.title);
+
         if (task.status === 'completed') {
-          totalCompleted++;
+          totalCompleted += weight;
         } else if (task.status === 'needsAction') {
           // Include open tasks without due date, or with due date within 6-month window
           if (!task.due) {
             // No due date: always count as open
-            totalOpen++;
+            totalOpen += weight;
           } else {
             const dueDate = new Date(task.due);
             if (!isNaN(dueDate.getTime())) {
               // Exclude tasks due more than 6 months in the future
               if (dueDate <= sixMonthsCutoff) {
-                totalOpen++;
+                totalOpen += weight;
                 // Calculate overdue only for tasks with due dates in the past
                 if (dueDate < now) {
-                  totalOverdue++;
+                  totalOverdue += weight;
                   const diffMs = now.getTime() - dueDate.getTime();
                   const daysOverdue = Math.max(
                     0,
                     diffMs / (1000 * 60 * 60 * 24)
                   );
-                  totalOverdueSeverity += Math.sqrt(daysOverdue);
+                  totalOverdueSeverity += weight * Math.sqrt(daysOverdue);
                 }
               }
             }
