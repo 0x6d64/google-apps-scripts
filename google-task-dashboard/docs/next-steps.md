@@ -173,29 +173,32 @@ Applied consistently to aggregate overdue count and severity.
 **Effort:** M
 
 
-### 7. Add top 3 overdue tasks
+### 7. Add top overdue tasks
 
 📋 **Planned**
 
 **Implementation:** During the existing Tasks API ingestion, identify the
-three currently open tasks with the greatest overdue duration. Use the
-overdue calculation defined in item 6. Calculate individual overdue severity
-using the same `sqrt(days_overdue)` formula as the aggregate metric. Store the
-resulting Top 3 as non-authoritative current state in script-level
-`CacheService` with a 6-hour expiration. The dashboard reads the cache
-without making additional Tasks API requests.
+10 currently open tasks with the greatest overdue duration. Use the overdue
+calculation defined in item 6. Calculate individual overdue severity using the
+same `sqrt(days_overdue)` formula as the aggregate metric. Store the Top 10 in
+a dedicated sheet in the same Google Sheets file, replacing the previous
+cache-based approach. The sheet is human-readable and exposes the current
+overdue task ranking. The dashboard reads the Top 10 from the sheet as part
+of the dashboard data request and displays only the Top 3.
 
 **Changes:**
 
-- Maintain the three most overdue tasks during ingestion.
+- Maintain the 10 most overdue tasks during ingestion.
 - Include task ID, task list ID, task list name, title, due date, overdue
   duration, and individual severity.
-- Store Top 3 data in script-level `CacheService`.
-- Read Top 3 data as part of the dashboard data request.
-- Hide the Top 3 section when cache data is unavailable or no overdue tasks
-  exist.
-- Do not add Top 3 task data to the historical snapshot sheet.
-- Keep Top 3 overdue calculations consistent with the aggregate overdue
+- Store the Top 10 in a dedicated sheet in the same Google Sheets file.
+- Replace the previous `CacheService` storage (if it exists) with sheet storage.
+- Read the Top 10 from the sheet as part of the dashboard data request.
+- Display only the Top 3 overdue tasks on the dashboard as defined by the
+  requirements.
+- Expose the full Top 10 in the sheet for human readers.
+- Hide the Top 3 section when the sheet contains no overdue tasks.
+- Keep Top 10 overdue calculations consistent with the aggregate overdue
   metrics.
 
 **Files:** requirements.md, Code.js, JavaScript.html
