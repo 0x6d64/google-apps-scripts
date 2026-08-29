@@ -136,115 +136,63 @@ and return before/after/removal statistics.
 
 ---
 
-### 6. Fix date-only task overdue handling
+### 6. Rework overdue calculation
 
 📋 **Planned**
 
-**Implementation:** Distinguish date-only due dates from tasks with an explicit
-due time. Date-only tasks become overdue only when their due calendar date is
-before today; explicitly timed tasks continue to use the exact due timestamp.
+**Implementation:** Replace the current timestamp-based overdue calculation
+with calendar-date-based overdue handling. Google Tasks does not expose the
+time-of-day component of due dates through the Tasks API, so a dated task is
+considered overdue starting at 21:00 on its due calendar date, using the Apps
+Script project timezone. Apply this definition consistently to the aggregate
+overdue count, overdue severity, and individual overdue tasks.
 
 **Changes:**
 
-- Detect date-only versus explicitly timed `task.due` values.
-- Compare date-only deadlines using the Apps Script project timezone.
-- Keep timestamp-based overdue detection for explicitly timed tasks.
-- Prevent date-only tasks from accumulating overdue severity during their due
-  day.
-- Validate today, yesterday, future, and explicitly timed deadlines.
+- Define the effective overdue deadline as 21:00 on the task's due date.
+- Use the Apps Script project timezone for date and time comparisons.
+- Treat tasks due today as not overdue before 21:00.
+- Treat tasks due on earlier calendar dates as overdue.
+- Keep tasks without a due date out of overdue calculations.
+- Rework `overdue` calculation to use the effective deadline.
+- Rework `overdue_severity` calculation to use the new overdue duration.
+- Ensure individual task severity uses the identical calculation.
+- Validate due today before/at/after 21:00, yesterday, future dates, and
+  undated tasks.
 
-**Files:** `Code.js`
-
-**Effort:** S
-
----
-
-### 7. Adaptive historical snapshot downsampling
-
-📋 **Planned**
-
-**Implementation:** Replace the current uniform hourly downsampling with a
-configurable age-based policy. Define three categories: Recent (0–3 days,
-maximum 1 sample per 30 minutes), Near-term (>3–7 days, maximum 1 sample per
-1 hour), and Historical (>7–365 days, maximum 1 sample per 3 hours). Use the
-following explicit parameters:
-
-- `RECENT_MAX_AGE_DAYS = 3`
-- `RECENT_INTERVAL_MINUTES = 30`
-- `NEAR_TERM_MAX_AGE_DAYS = 7`
-- `NEAR_TERM_INTERVAL_MINUTES = 60`
-- `HISTORICAL_MAX_AGE_DAYS = 365`
-- `HISTORICAL_INTERVAL_HOURS = 3`
-
-Within each rolling interval, retain the latest snapshot and do not create or
-interpolate missing data. Data older than `HISTORICAL_MAX_AGE_DAYS` is not
-affected. Read only rows within the affected `HISTORICAL_MAX_AGE_DAYS` range
-where practical, leaving older rows untouched. Preserve chronological
-ordering and return before/after/removal statistics.
-
-**Changes:**
-
-- [pending implementation]
-
-**Files:** requirements.md, Code.js, Index.html
+**Files:** requirements.md, Code.js
 
 **Effort:** M
 
 
-### 8. Add top 3 overdue tasks
+### 7. Add top 3 overdue tasks
 
 📋 **Planned**
 
 **Implementation:** During the existing Tasks API ingestion, identify the
-three currently open tasks with the greatest overdue duration. Calculate
-individual overdue severity using the same `sqrt(days_overdue)` formula as
-the aggregate overdue severity metric. Store the resulting Top 3 as
-non-authoritative current state in Apps Script `CacheService` with a 6-hour
-expiration. The dashboard reads the cached data without making additional
-Tasks API requests. If the cache is unavailable or expired, hide the section
-until the next successful ingestion.
+three currently open tasks with the greatest overdue duration. Use the
+overdue calculation defined in item 6. Calculate individual overdue severity
+using the same `sqrt(days_overdue)` formula as the aggregate metric. Store the
+resulting Top 3 as non-authoritative current state in script-level
+`CacheService` with a 6-hour expiration. The dashboard reads the cache
+without making additional Tasks API requests.
 
 **Changes:**
 
-- Calculate and maintain the three most overdue tasks during ingestion.
-- Include task ID, title, due date, overdue duration, and individual severity.
+- Maintain the three most overdue tasks during ingestion.
+- Include task ID, task list ID, task list name, title, due date, overdue
+  duration, and individual severity.
 - Store Top 3 data in script-level `CacheService`.
 - Read Top 3 data as part of the dashboard data request.
-- Hide the Top 3 section when no cached data is available or no overdue tasks
+- Hide the Top 3 section when cache data is unavailable or no overdue tasks
   exist.
 - Do not add Top 3 task data to the historical snapshot sheet.
+- Keep Top 3 overdue calculations consistent with the aggregate overdue
+  metrics.
 
 **Files:** requirements.md, Code.js, JavaScript.html
 
 **Effort:** M
 
 
-### 9. Improve dashboard KPI and overdue-task layout
-
-📋 **Planned**
-
-**Implementation:** Visually distinguish the Backlog ETA KPI from the
-Overdue KPI by using an indigo/blue color rather than the existing overdue
-red. Add a compact full-width Top 3 Overdue section below the KPI cards and
-above the chart controls. Display task title, overdue duration, and
-individual overdue severity for each item, with an "Open Google Tasks"
-action. Keep the section compact and hide it when there are no overdue tasks.
-
-**Changes:**
-
-- Change Backlog ETA card color to a neutral indigo/blue treatment.
-- Add compact Top 3 Overdue section below the KPI cards.
-- Display title, overdue duration, and severity columns.
-- Add "Open Google Tasks" action.
-- Remove the task-metrics explanatory note from the dashboard.
-- Ensure the layout remains compact and responsive.
-
-**Files:** requirements.md, Index.html, Styles.html
-
-**Effort:** M
-
----
-
 ## Feature requests
-
-- ensure that 
