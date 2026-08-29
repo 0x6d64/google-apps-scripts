@@ -74,7 +74,7 @@ function handleCalendarEvent(secret, text) {
             const config2 = getConfig();
             const spreadsheet = getOrCreateSpreadsheet(config2.spreadsheetName);
             const sheet = getOrCreateSheet(spreadsheet, config2.sheetName);
-            appendEntry(sheet, [timestamp, p.title, 'status']);
+            appendEntry(sheet, [timestamp, p.title, 'pebble']);
           },
           RETRY_COUNT,
           RETRY_DELAYS_MS
