@@ -60,11 +60,14 @@
 //   Set to null to disable the prefix.
 //   Example: '📍 ' turns "Fixed the bug" into "📍 Fixed the bug".
 
-var SHARED_SECRET = 'PASTE_A_RANDOM_SECRET_HERE';
 var DEFAULT_EVENT_MINUTES = 30;
 var STATUS_EVENT_MINUTES = 1;
 var STATUS_EVENT_COLOR = CalendarApp.EventColor.RED;
 var STATUS_EVENT_PREFIX = '📍 ';
+
+function getSecret() {
+  return PropertiesService.getScriptProperties().getProperty('SHARED_SECRET');
+}
 
 // Run this ONCE from the editor (Run > authorize) to grant Calendar access.
 function authorize() {
@@ -87,7 +90,7 @@ function doPost(e) {
 
 function handle(secret, text) {
   try {
-    if (secret !== SHARED_SECRET) {
+    if (secret !== getSecret()) {
       return json({ ok: false, error: 'bad secret' });
     }
 
