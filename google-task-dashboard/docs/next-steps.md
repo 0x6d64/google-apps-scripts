@@ -73,16 +73,33 @@ When editing this doc, use the following guidelines:
 
 ### 3. Weight task metrics by priority prefix in task title
 
+✅ **DONE**
+
+**Implementation:** Parse task `title` (the main summary line; not `notes`) for `!` prefix at the beginning only. No prefix = weight 1, `!` = weight 2, `!!` = weight 3, `!!!` = weight 4, `!!!!` = weight 5. Apply weights to stored snapshot values at ingestion time: `open`, `completed`, `overdue`, `overdue_severity`. Derived metrics (addition rate, completion rate, velocity) are computed client-side from snapshot deltas and naturally reflect weights once weighted snapshots are present. Historical snapshots store unweighted aggregates — visible metric jump at first weighted ingestion expected and accepted.
+
+**Changes:**
+- Added `getTaskWeight(title)` function in Code.js to extract prefix weight
+- Modified metric accumulation in `ingestTaskMetrics()` to apply weights: `totalOpen += weight`, `totalCompleted += weight`, `totalOverdue += weight`, `totalOverdueSeverity += weight * sqrt(daysOverdue)`
+- Added `getTaskWeight(title)` function in JavaScript.html (mirrors backend for consistency)
+
+**Files:** Code.js, JavaScript.html
+
+**Effort:** M ✓
+
+---
+
+### 4. Persist dashboard UI preferences to localStorage
+
 📋 **planned**
 
-**Implementation:** Parse task `title` (the main summary line; not `notes`) for `!` prefix at the beginning only. No prefix = weight 1, `!` = weight 2, `!!` = weight 3, `!!!` = weight 4, `!!!!` = weight 5. Apply weights to stored snapshot values at ingestion time: `open`, `completed`, `overdue`, `overdue_severity`. Derived metrics (addition rate, completion rate, velocity) are computed client-side from snapshot deltas and will naturally reflect weights once weighted snapshots are present. Historical snapshots store unweighted aggregates and cannot be retroactively corrected — a visible jump in metrics at the first weighted ingestion is expected and accepted.
+**Implementation:** Save user preferences to browser localStorage to restore state across sessions: range filter (1D/3D/7D/14D/30D/All), series visibility toggles (Open/Overdue/Completed/Severity/Trend), auto-fetch interval, auto-trigger enabled state. Load and apply saved values on page init. No performance gain — UX convenience only.
 
 **Changes:**
 - [pending implementation]
 
-**Files:** Code.js (ingestion logic), JavaScript.html (chart/KPI calculations)
+**Files:** JavaScript.html
 
-**Effort:** M
+**Effort:** S
 
 ---
 
