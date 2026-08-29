@@ -71,12 +71,21 @@ When editing this doc, use the following guidelines:
 
 ---
 
+### 3. Weight task metrics by priority prefix in task title
+
+📋 **planned**
+
+**Implementation:** Parse task `title` (the main summary line; not `notes`) for `!` prefix at the beginning only. No prefix = weight 1, `!` = weight 2, `!!` = weight 3, `!!!` = weight 4, `!!!!` = weight 5. Apply weights to stored snapshot values at ingestion time: `open`, `completed`, `overdue`, `overdue_severity`. Derived metrics (addition rate, completion rate, velocity) are computed client-side from snapshot deltas and will naturally reflect weights once weighted snapshots are present. Historical snapshots store unweighted aggregates and cannot be retroactively corrected — a visible jump in metrics at the first weighted ingestion is expected and accepted.
+
+**Changes:**
+- [pending implementation]
+
+**Files:** Code.js (ingestion logic), JavaScript.html (chart/KPI calculations)
+
+**Effort:** M
+
+---
+
 ## Feature requests
 
-- when ingesting tasks from the Tasks API, the descriptions shall be parsed. I
-  want to use a prefix of `!` characters to mark a task as more important, the
-  tasks marked like that shall count as 2, 3, 4, ... tasks. the logic shall be
-  as follows: no prefix: counts as 1. Prefix `!`: counts as 2. Prefix `!!`:
-  counts as 3, and so on (up to 4 times the `!` prefix that counts as 5). the
-  prefix shall only be found if its at the beginning of the description. the
-  prefix shall influence all metrics (including overdue and completion rate).
+<!-- Append new requests below. One bullet per request. -->
