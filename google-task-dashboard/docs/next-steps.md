@@ -136,6 +136,29 @@ and return before/after/removal statistics.
 
 ---
 
+### 6. Fix date-only task overdue handling
+
+📋 **Planned**
+
+**Implementation:** Distinguish date-only due dates from tasks with an explicit
+due time. Date-only tasks become overdue only when their due calendar date is
+before today; explicitly timed tasks continue to use the exact due timestamp.
+
+**Changes:**
+
+- Detect date-only versus explicitly timed `task.due` values.
+- Compare date-only deadlines using the Apps Script project timezone.
+- Keep timestamp-based overdue detection for explicitly timed tasks.
+- Prevent date-only tasks from accumulating overdue severity during their due
+  day.
+- Validate today, yesterday, future, and explicitly timed deadlines.
+
+**Files:** `Code.js`
+
+**Effort:** S
+
+---
+
 ## Feature requests
 
-<!-- Append new requests below. One bullet per request. -->
+- ensure that 
