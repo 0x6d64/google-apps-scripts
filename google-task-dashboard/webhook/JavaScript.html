@@ -1062,34 +1062,6 @@
     /**
      * Triggers Sync & Clear Completed Tasks RPC with confirmation.
      */
-    function handleSyncAndClear() {
-      const confirmed = confirm(
-        '⚠️ PERMANENT ACTION:\n\n' +
-        'This will persist the latest metrics to the Google Sheet and CLEAR/ARCHIVE all completed tasks across all your Google Task lists.\n\n' +
-        'Are you sure you want to proceed?'
-      );
-      if (!confirmed) return;
-
-      setButtonsDisabled(true);
-      showStatus('Persisting metrics and purging completed tasks across all lists...', 'info');
-
-      google.script.run
-        .withSuccessHandler((data) => {
-          setButtonsDisabled(false);
-          showStatus('Completed tasks purged and snapshot persisted successfully!', 'success');
-          if (data && data.rows && data.rows.length > 0) {
-            const latest = data.rows[data.rows.length - 1];
-            showNotification(`Completed tasks purged\n${latest[2]} tasks cleared`, '🔥', 'success', 4000);
-          }
-          onDataLoaded(data);
-        })
-        .withFailureHandler((err) => {
-          setButtonsDisabled(false);
-          onDataError(err);
-        })
-        .syncAndClearTasks();
-    }
-
     /**
      * Triggers manual pruning of records older than 1 year to 1 per day.
      */
@@ -1278,7 +1250,6 @@
       handleReloadData: handleReloadData,
       handleSyncNow: handleSyncNow,
       handleDeleteOldCompletedTasks: handleDeleteOldCompletedTasks,
-      handleSyncAndClear: handleSyncAndClear,
       handleDownsampleLastYear: handleDownsampleLastYear,
       handlePruneOldData: handlePruneOldData,
       handleTriggerToggle: handleTriggerToggle
