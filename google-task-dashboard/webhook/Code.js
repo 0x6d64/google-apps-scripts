@@ -8,6 +8,10 @@ const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
 const SYNC_LOCK_COOLDOWN_MS = 10000; // 10 seconds debounce lock
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
 const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
+const TOP_OVERDUE_ITEMS = 5;
+const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity'];
+const OVERDUE_HOUR = 21;
+const DEFAULT_TIMEZONE = 'Europe/Bucharest';
 
 /**
  * Serves the web dashboard HTML interface.
@@ -76,6 +80,27 @@ function getOrCreateSheet() {
 }
 
 /**
+ * Retrieves or creates the Top Overdue sheet for storing top 10 overdue tasks.
+ * @return {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function getOrCreateTopOverdueSheet() {
+  const metricsSheet = getOrCreateSheet();
+  const spreadsheet = metricsSheet.getParent();
+  let topOverdueSheet = spreadsheet.getSheetByName('Top Overdue');
+
+  if (!topOverdueSheet) {
+    topOverdueSheet = spreadsheet.insertSheet('Top Overdue');
+    topOverdueSheet.appendRow(TOP_OVERDUE_HEADERS);
+    topOverdueSheet.setFrozenRows(1);
+  } else if (topOverdueSheet.getLastRow() === 0) {
+    topOverdueSheet.appendRow(TOP_OVERDUE_HEADERS);
+    topOverdueSheet.setFrozenRows(1);
+  }
+
+  return topOverdueSheet;
+}
+
+/**
  * Returns the spreadsheet URL for direct viewing in Google Drive.
  * @return {string}
  */
@@ -98,12 +123,53 @@ function getSpreadsheetUrl() {
  */
 function getTaskWeight(title) {
   if (!title || typeof title !== 'string') return 1;
-  
+
   const match = title.match(/^!{1,4}/);
   if (!match) return 1;
-  
+
   const prefixLen = match[0].length;
   return prefixLen + 1; // 1 "!" → 2, 2 "!" → 3, etc.
+}
+
+/**
+ * Retrieves timezone from account settings with fallback to default.
+ * @return {string} - IANA timezone string
+ */
+function getTimezone() {
+  try {
+    return Session.getScriptTimeZone();
+  } catch (e) {
+    return DEFAULT_TIMEZONE;
+  }
+}
+
+/**
+ * Calculates the UTC time corresponding to overdueHour:00:00 on a given calendar date
+ * in the specified timezone.
+ * @param {string} dueDateStr - Calendar date in YYYY-MM-DD format (from Tasks API)
+ * @param {string} timezone - IANA timezone string (e.g., 'Europe/Bucharest')
+ * @param {number} overdueHour - Hour of day (0-23) when task becomes overdue in target timezone
+ * @return {Date} - UTC time representing that deadline
+ */
+function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
+  const parts = dueDateStr.split('-');
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const day = parseInt(parts[2], 10);
+
+  // Find which UTC hour on this date corresponds to overdueHour in the target timezone
+  for (let utcHour = 0; utcHour < 24; utcHour++) {
+    const candidateUTC = new Date(Date.UTC(year, month, day, utcHour, 0, 0));
+    const formattedInTZ = Utilities.formatDate(candidateUTC, timezone, 'HH:mm');
+    const [tzHour] = formattedInTZ.split(':').map(Number);
+
+    if (tzHour === overdueHour) {
+      return candidateUTC;
+    }
+  }
+
+  // Fallback (should not reach here for valid inputs)
+  return new Date(Date.UTC(year, month, day, overdueHour, 0, 0));
 }
 
 function ingestTaskMetrics() {
@@ -124,6 +190,7 @@ function ingestTaskMetrics() {
   let totalCompleted = 0;
   let totalOverdue = 0;
   let totalOverdueSeverity = 0.0;
+  const overdueTasksList = []; // Collect all open overdue tasks
 
   for (let i = 0; i < taskLists.length; i++) {
     const listId = taskLists[i].id;
@@ -162,20 +229,37 @@ function ingestTaskMetrics() {
             // No due date: always count as open
             totalOpen += weight;
           } else {
-            const dueDate = new Date(task.due);
-            if (!isNaN(dueDate.getTime())) {
-              // Exclude tasks due more than 6 months in the future
-              if (dueDate <= sixMonthsCutoff) {
+            // task.due is calendar date in YYYY-MM-DD format
+            const dueDateStr = task.due;
+            const dueDateObj = new Date(dueDateStr);
+
+            if (!isNaN(dueDateObj.getTime())) {
+              // Exclude tasks due more than 6 months in the future (calendar date comparison)
+              if (dueDateObj <= sixMonthsCutoff) {
                 totalOpen += weight;
-                // Calculate overdue only for tasks with due dates in the past
-                if (dueDate < now) {
+
+                // Calculate overdue based on calendar date and OVERDUE_HOUR deadline in configured timezone
+                const timezone = getTimezone();
+                const overdueDeadline = getOverdueDeadline(dueDateStr, timezone, OVERDUE_HOUR);
+
+                if (now >= overdueDeadline) {
+                  // Task is overdue
                   totalOverdue += weight;
-                  const diffMs = now.getTime() - dueDate.getTime();
-                  const daysOverdue = Math.max(
-                    0,
-                    diffMs / (1000 * 60 * 60 * 24)
-                  );
-                  totalOverdueSeverity += weight * Math.sqrt(daysOverdue);
+                  const diffMs = now.getTime() - overdueDeadline.getTime();
+                  const daysOverdue = diffMs / (1000 * 60 * 60 * 24);
+                  const severity = weight * Math.sqrt(daysOverdue);
+                  totalOverdueSeverity += severity;
+
+                  // Collect overdue task for top 10 ranking
+                  overdueTasksList.push({
+                    taskId: task.id,
+                    taskListId: listId,
+                    taskListName: taskLists[i].title || 'Untitled',
+                    title: task.title || '',
+                    dueDate: dueDateStr,
+                    overdueDuration: daysOverdue,
+                    severity: Number(severity.toFixed(2))
+                  });
                 }
               }
             }
@@ -204,13 +288,47 @@ function ingestTaskMetrics() {
     snapshot.overdue_severity
   ]);
 
+  // Update Top Overdue sheet with top 10 tasks sorted by severity descending
+  overdueTasksList.sort((a, b) => b.severity - a.severity);
+  const topTen = overdueTasksList.slice(0, 10);
+  updateTopOverdueSheet(topTen);
+
   return snapshot;
 }
 
 /**
+ * Updates the Top Overdue sheet with the top 10 overdue tasks.
+ * Clears existing data and writes new top 10 rows.
+ * @param {Array<Object>} topTenTasks - Array of top 10 overdue task objects
+ */
+function updateTopOverdueSheet(topTenTasks) {
+  const sheet = getOrCreateTopOverdueSheet();
+  const lastRow = sheet.getLastRow();
+
+  // Delete all data rows (keep header at row 1)
+  if (lastRow > 1) {
+    sheet.deleteRows(2, lastRow - 1);
+  }
+
+  // Append new top 10 rows
+  for (let i = 0; i < topTenTasks.length; i++) {
+    const task = topTenTasks[i];
+    sheet.appendRow([
+      task.taskId,
+      task.taskListId,
+      task.taskListName,
+      task.title,
+      task.dueDate,
+      Number(task.overdueDuration.toFixed(2)),
+      task.severity
+    ]);
+  }
+}
+
+/**
  * Fetches all historical time series metrics from the spreadsheet.
- * Includes data validation and type coercion.
- * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean }
+ * Includes data validation and type coercion. Also fetches top 10 overdue tasks.
+ * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean, topOverdueTasksTop3: Array<Object> }
  */
 function getDashboardData() {
   const sheet = getOrCreateSheet();
@@ -247,12 +365,54 @@ function getDashboardData() {
     validRows.push([isoTimestamp, open, completed, overdue, severity]);
   }
 
+  // Fetch top 3 overdue tasks from the Top Overdue sheet
+  const topOverdueTasksTopX = getTopOverdueTasksTopX();
+
   return {
     headers: headers,
     rows: validRows,
     sheetUrl: sheetUrl,
-    triggerActive: isTriggerActive()
+    triggerActive: isTriggerActive(),
+    topOverdueTasksTopX: topOverdueTasksTopX
   };
+}
+
+/**
+ * Fetches the top 3 overdue tasks from the Top Overdue sheet.
+ * @return {Array<Object>} Top 3 overdue tasks or empty array if none exist
+ */
+function getTopOverdueTasksTopX() {
+  try {
+    const sheet = getOrCreateTopOverdueSheet();
+    const lastRow = sheet.getLastRow();
+
+    if (lastRow <= 1) {
+      return [];
+    }
+
+    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_ITEMS, lastRow - 1), 7).getValues();
+    const tasks = [];
+
+    for (let i = 0; i < rawValues.length; i++) {
+      const row = rawValues[i];
+      if (!row || !row[0]) continue;
+
+      tasks.push({
+        taskId: row[0] || '',
+        taskListId: row[1] || '',
+        taskListName: row[2] || '',
+        title: row[3] || '',
+        dueDate: row[4] || '',
+        overdueDuration: isNaN(Number(row[5])) ? 0 : Number(row[5]),
+        severity: isNaN(Number(row[6])) ? 0 : Number(row[6])
+      });
+    }
+
+    return tasks;
+  } catch (e) {
+    Logger.log('Error fetching top overdue tasks: ' + e);
+    return [];
+  }
 }
 
 /**

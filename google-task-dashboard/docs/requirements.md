@@ -30,9 +30,16 @@ auth = sufficient security.
 - `timestamp`, `open`, `completed`, `overdue`, `overdue_severity`
 - `open`: incomplete tasks, excluding due-date >6mo in future (undated tasks
   always included)
-- `overdue`: open tasks with `due < now`
-- `overdue_severity`: `Σ sqrt(days_overdue)` across overdue open tasks,
-  fractional days retained (sublinear penalty, dampens outliers)
+- `overdue`: open tasks with a due date whose effective overdue deadline has
+  passed. Because the Tasks API does not expose the time-of-day component, the
+  effective deadline is 21:00 on the due calendar date, using the Apps Script
+  project timezone.
+- Tasks due today are not overdue before 21:00; tasks due on an earlier
+  calendar date are overdue throughout the current day. Tasks without a due
+  date are never overdue.
+- `overdue_severity`: `Σ sqrt(days_overdue)` across overdue open tasks, with
+  `days_overdue` calculated from the effective 21:00 deadline and fractional
+  days retained (sublinear penalty, dampens outliers)
 - Stacked/chart decomposition: `on_time_open = open - overdue` (mutually
   exclusive with `overdue`, avoids double-counting)
 
@@ -48,8 +55,14 @@ auth = sufficient security.
   (all lists)
 - `deleteTasksCompletedOlderThan(cutoffWeeks=8)` — delete completed tasks
   older than cutoff, keep recent ones, re-ingest after
-- `downsampleLastYearToHourly()` — collapse last-365-day rows to ≤1/rolling-
-  60min-window, latest-wins
+- `downsampleLastYearToHourly()` — collapse last-365-day rows using the
+  configured age-based downsampling policy, latest-wins
+- During `ingestTaskMetrics()`, calculate the three most overdue open tasks
+  and store their task ID, task list ID, task list name, title, due date,
+  overdue duration, and individual severity in script-level `CacheService`.
+- `getDashboardData()` reads the cached Top 3 without making a Tasks API
+  request. Cache uses a 6-hour expiration and missing/expired data is treated
+  as unavailable.
 - `pruneDataOlderThan1Year()` — collapse >365-day rows to 1/calendar-day
   (UTC); abort if >80% of rows would be deleted; return stats
   (`totalBefore/After/Pruned/durationMs`)
@@ -61,6 +74,12 @@ auth = sufficient security.
 - Velocity: 24h / 3d / 7d completion throughput. Sum positive deltas only
   (ignore drops from purge/delete). Use actual elapsed time between
   snapshots, not fixed interval.
+- Top 3 Overdue section: compact full-width section below the KPI cards;
+  display task title, overdue duration, and individual overdue severity, plus
+  an `Open Google Tasks` action. Hide when no overdue tasks are available in
+  cache.
+- Backlog ETA uses a neutral indigo/blue treatment distinct from the red
+  Overdue KPI.
 - Backlog ETA card: shown only if `completion_rate > addition_rate` and
   `open > 0`; else hidden / "Cannot estimate". Recalculates on range change.
 - Snapshot age and sheet-fetch age shown separately, both self-updating

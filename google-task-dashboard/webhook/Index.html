@@ -78,11 +78,6 @@
       </div>
     </section>
 
-    <!-- Filter Explanation Note -->
-    <div style="background: var(--surface-light); border-left: 4px solid var(--text-secondary); padding: 12px 16px; margin: 0 0 16px 0; border-radius: 4px; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
-      <strong>Note on task metrics:</strong> The open-task count excludes tasks due more than 6 months in the future. This provides a realistic view of near-term work. Tasks without due dates are always counted.
-    </div>
-
     <!-- Interactive Filters & Controls Toolbar -->
     <section class="controls-toolbar">
       <div class="control-group">
@@ -130,6 +125,17 @@
       </div>
     </section>
 
+    <!-- Top n Overdue Tasks -->
+    <section class="panel" id="topOverduePanel" style="display: none;">
+      <div class="panel-header">
+        <h2>Top Overdue Tasks</h2>
+        <span class="panel-badge">Most Pressing</span>
+      </div>
+      <div id="topOverdueList" class="overdue-tasks-list">
+        <!-- Tasks rendered here -->
+      </div>
+    </section>
+
     <!-- Collapsible Danger Zone for Housekeeping -->
     <section class="panel danger-zone-panel">
       <details class="danger-zone-details">
@@ -163,9 +169,6 @@
           </div>
 
           <div class="danger-zone-actions">
-            <button id="btnSyncClear" class="btn btn-danger" title="Permanently clear and archive all completed tasks from Google Tasks after safely appending a final metrics snapshot to the Google Sheet." onclick="DashboardApp.handleSyncAndClear()">
-              <span class="btn-icon">🔥</span> Purge Completed Tasks Across All Lists
-            </button>
             <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact." onclick="DashboardApp.handleDeleteOldCompletedTasks()">
               <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
             </button>

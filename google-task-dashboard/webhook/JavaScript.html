@@ -19,13 +19,12 @@
     const RESIZE_DEBOUNCE_MS = 300;
     const STALENESS_UPDATE_INTERVAL_MS = 10 * 1000;
     const NOTIFICATION_ANIMATION_MS = 250;
-    const NOTIFICATION_DEFAULT_DURATION_MS = 3000;
     const NOTIFICATION_ERROR_DURATION_MS = 5000;
     const MS_PER_DAY = 1000 * 60 * 60 * 24;
     const DOWNSAMPLE_TARGET_BUCKETS = 50;
     const ROLLING_AVG_WINDOW_MIN = 2;
     const ROLLING_AVG_WINDOW_MAX = 168;
-    const ROLLING_AVG_TARGET_BUCKETS = 50;
+    const ROLLING_AVG_TARGET_BUCKETS = 35;
     const ROLLING_AVG_OPACITY = 0.6;
     const ROLLING_AVG_LINE_DASH = [5, 5];
     const VELOCITY_WINDOW_1D = 1;
@@ -41,6 +40,19 @@
       completed: '#188038',  // Green (Completed tasks)
       severity: '#a142f4'    // Purple (Severity line overlay on right axis)
     };
+
+    /**
+     * Extracts task weight from title prefix (mirrors backend implementation).
+     * Prefix rules: no prefix = 1, "!" = 2, "!!" = 3, "!!!" = 4, "!!!!" = 5.
+     * @param {string} title - Task title
+     * @return {number} - Weight (1-5)
+     */
+    function getTaskWeight(title) {
+      if (!title || typeof title !== 'string') return 1;
+      const match = title.match(/^!{1,4}/);
+      if (!match) return 1;
+      return match[0].length + 1;
+    }
 
     /**
      * Initializes Google Charts, notifications container, and fetches dashboard metrics.
@@ -281,6 +293,7 @@
 
       updateKPIsAndStaleness();
       renderCharts();
+      renderTopOverdueTasks(data.topOverdueTasksTopX || []);
     }
 
     /**
@@ -1062,34 +1075,6 @@
     /**
      * Triggers Sync & Clear Completed Tasks RPC with confirmation.
      */
-    function handleSyncAndClear() {
-      const confirmed = confirm(
-        '⚠️ PERMANENT ACTION:\n\n' +
-        'This will persist the latest metrics to the Google Sheet and CLEAR/ARCHIVE all completed tasks across all your Google Task lists.\n\n' +
-        'Are you sure you want to proceed?'
-      );
-      if (!confirmed) return;
-
-      setButtonsDisabled(true);
-      showStatus('Persisting metrics and purging completed tasks across all lists...', 'info');
-
-      google.script.run
-        .withSuccessHandler((data) => {
-          setButtonsDisabled(false);
-          showStatus('Completed tasks purged and snapshot persisted successfully!', 'success');
-          if (data && data.rows && data.rows.length > 0) {
-            const latest = data.rows[data.rows.length - 1];
-            showNotification(`Completed tasks purged\n${latest[2]} tasks cleared`, '🔥', 'success', 4000);
-          }
-          onDataLoaded(data);
-        })
-        .withFailureHandler((err) => {
-          setButtonsDisabled(false);
-          onDataError(err);
-        })
-        .syncAndClearTasks();
-    }
-
     /**
      * Triggers manual pruning of records older than 1 year to 1 per day.
      */
@@ -1270,6 +1255,76 @@
       if (banner) banner.style.display = 'none';
     }
 
+    /**
+     * Renders the top 3 overdue tasks in the UI.
+     * Hides the panel if no tasks exist.
+     * @param {Array<Object>} topTasks - Array of top overdue task objects
+     */
+    function renderTopOverdueTasks(topTasks) {
+      const panel = document.getElementById('topOverduePanel');
+      const list = document.getElementById('topOverdueList');
+
+      if (!panel || !list) return;
+
+      if (!topTasks || topTasks.length === 0) {
+        panel.style.display = 'none';
+        return;
+      }
+
+      panel.style.display = 'block';
+      list.innerHTML = '';
+
+      for (let i = 0; i < topTasks.length; i++) {
+        const task = topTasks[i];
+        const item = document.createElement('div');
+        item.className = 'overdue-task-item';
+
+        const daysOverdue = task.overdueDuration || 0;
+        const dayLabel = Math.floor(daysOverdue) === 1 ? 'day' : 'days';
+
+        item.innerHTML = `
+          <div class="overdue-task-index">${i + 1}</div>
+          <div class="overdue-task-content">
+            <div class="overdue-task-title">${escapeHtml(task.title)}</div>
+            <div class="overdue-task-meta">
+              <div class="overdue-task-meta-item">
+                <span>📅</span>
+                <span>${escapeHtml(task.dueDate)}</span>
+              </div>
+              <div class="overdue-task-meta-item">
+                <span>📋</span>
+                <span>${escapeHtml(task.taskListName)}</span>
+              </div>
+              <div class="overdue-task-meta-item">
+                <span>⏳</span>
+                <span>${Math.floor(daysOverdue)} ${dayLabel} overdue</span>
+              </div>
+            </div>
+          </div>
+          <div class="overdue-task-severity">√${task.severity.toFixed(1)}</div>
+        `;
+
+        list.appendChild(item);
+      }
+    }
+
+    /**
+     * Escapes HTML special characters to prevent XSS.
+     * @param {string} text
+     * @return {string}
+     */
+    function escapeHtml(text) {
+      if (!text) return '';
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return String(text).replace(/[&<>"']/g, (char) => map[char]);
+    }
+
     // Public API
     return {
       init: init,
@@ -1278,7 +1333,6 @@
       handleReloadData: handleReloadData,
       handleSyncNow: handleSyncNow,
       handleDeleteOldCompletedTasks: handleDeleteOldCompletedTasks,
-      handleSyncAndClear: handleSyncAndClear,
       handleDownsampleLastYear: handleDownsampleLastYear,
       handlePruneOldData: handlePruneOldData,
       handleTriggerToggle: handleTriggerToggle
