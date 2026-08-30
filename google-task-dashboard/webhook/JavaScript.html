@@ -30,6 +30,8 @@
     const VELOCITY_WINDOW_1D = 1;
     const VELOCITY_WINDOW_3D = 3;
     const VELOCITY_WINDOW_7D = 7;
+    const ETA_THRESHOLD_GOOD = 14;
+    const ETA_THRESHOLD_CAUTION = 30;
 
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
@@ -503,6 +505,18 @@
     }
 
     /**
+     * Determines status class based on ETA days.
+     * @param {number} days - Estimated days to completion
+     * @return {string} - 'status-good', 'status-caution', or 'status-warning'
+     */
+    function getETAStatusClass(days) {
+      if (typeof days !== 'number' || !isFinite(days)) return '';
+      if (days <= ETA_THRESHOLD_GOOD) return 'status-good';
+      if (days <= ETA_THRESHOLD_CAUTION) return 'status-caution';
+      return 'status-warning';
+    }
+
+    /**
      * Updates backlog completion estimate in the UI.
      * Called from updateKPIsAndStaleness after calculating completion rate.
      */
@@ -533,6 +547,12 @@
           label.textContent = estimate;
           // Use a smaller font for text-based values so they fit on one line
           label.classList.toggle('value-compact', isNaN(Number(estimate)));
+          
+          // Apply status coloring based on numeric ETA
+          const numDays = parseFloat(estimate);
+          const statusClass = getETAStatusClass(numDays);
+          label.className = 'value ' + statusClass;
+          estCard.className = 'card card-purple ' + statusClass;
         }
         
         if (note) {
@@ -569,7 +589,7 @@
           new Date(r[0]).getTime() >= cutoff
         );
 
-        if (recentRows.length < 2) return '-';
+        if (recentRows.length < 2) return { value: '-', status: '' };
 
         let totalCompletions = 0;
         for (let i = 1; i < recentRows.length; i++) {
@@ -580,16 +600,29 @@
         const oldestTime = new Date(recentRows[0][0]).getTime();
         const newestTime = new Date(recentRows[recentRows.length - 1][0]).getTime();
         const elapsedDays = Math.max(1, newestTime - oldestTime) / MS_PER_DAY;
-
-        return (totalCompletions / elapsedDays).toFixed(1);
+        const velocity = totalCompletions / elapsedDays;
+        
+        // Calculate implied ETA based on current open and velocity
+        const currentOpen = typeof recentRows[recentRows.length - 1][1] === 'number' ? recentRows[recentRows.length - 1][1] : 0;
+        const impliedETA = velocity > 0 ? currentOpen / velocity : Infinity;
+        
+        return {
+          value: velocity.toFixed(1),
+          status: getETAStatusClass(impliedETA)
+        };
       };
 
-      setElemText(
-        'kpiVelocitySubtext',
-        '24h: ' + calculate(VELOCITY_WINDOW_1D) +
-        ' \u00a0 3d: ' + calculate(VELOCITY_WINDOW_3D) +
-        ' \u00a0 7d: ' + calculate(VELOCITY_WINDOW_7D) + ' /day'
-      );
+      const vel1d = calculate(VELOCITY_WINDOW_1D);
+      const vel3d = calculate(VELOCITY_WINDOW_3D);
+      const vel7d = calculate(VELOCITY_WINDOW_7D);
+
+      const velocitySubtext = document.getElementById('kpiVelocitySubtext');
+      if (velocitySubtext) {
+        velocitySubtext.innerHTML =
+          '<span class="' + vel1d.status + '">24h: ' + vel1d.value + '</span>' +
+          ' \u00a0 <span class="' + vel3d.status + '">3d: ' + vel3d.value + '</span>' +
+          ' \u00a0 <span class="' + vel7d.status + '">7d: ' + vel7d.value + '</span> /day';
+      }
     }
 
     /**
