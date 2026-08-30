@@ -546,6 +546,76 @@
     animation: notificationSlideOut 0.25s ease-out forwards;
   }
 
+  /* Overdue Tasks List */
+  .overdue-tasks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .overdue-task-item {
+    background: #fffbfa;
+    border: 1px solid #fad2cf;
+    border-left: 4px solid var(--danger);
+    border-radius: 6px;
+    padding: 12px 16px;
+    display: flex;
+    gap: 12px;
+  }
+
+  .overdue-task-index {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    background: var(--danger);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+  }
+
+  .overdue-task-content {
+    flex-grow: 1;
+    min-width: 0;
+  }
+
+  .overdue-task-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    word-break: break-word;
+    margin-bottom: 4px;
+  }
+
+  .overdue-task-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+  }
+
+  .overdue-task-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .overdue-task-severity {
+    flex-shrink: 0;
+    background: var(--danger);
+    color: white;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    align-self: flex-start;
+    margin-top: 2px;
+  }
+
   @media (max-width: 768px) {
     .container {
       padding: 16px 12px;
