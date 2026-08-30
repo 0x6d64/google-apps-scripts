@@ -207,3 +207,28 @@ of the dashboard data request and displays only the Top 3.
 
 
 ## Feature requests
+
+- at the bottom of the dashboard: add a text field that can be copied from 
+  (offer a copy button). in that text field, add a "day summary" for the 
+  last 7 days.
+  - the format shall be: YYYY-MM-DD: 20/5/10/23.3 
+    (open/overdue/completed/overdue_severity). 
+    Delta: +2/-1/+1/+4
+  - the current day shall also get an entry but with the date "today so far"
+  - purpose: get a quick history
+  - the data needed shall be calculated in the ingestion loop (since its 
+    triggered automatically)
+  - if historical data needs to be stored separately: an additional sheet in 
+    the data sheet can be created
+  - if a sheet is created, historical data for 14d shall be stored and then 
+    the UI shall show the most recent 7 items
+  - the values 7 and 14 shall be configurable
+- we want to give the ETA a status/rating: 
+  - if its 14 or lower: thats considered good/green
+  - if its >14: thats caution/yellow
+  - if its >30: thats warning/red
+  - the status shall be marked in the ETA card
+  - the boundaries above shall also influence the velocity: if the velocity 
+    is such that the ETA is 14 or lower: velocity is good, if its slower so 
+    that ETA is in the caution range: its yellow, below that its red
+  - the velocity number shall also be color coded in the card
