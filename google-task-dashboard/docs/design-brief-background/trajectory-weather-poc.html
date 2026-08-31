@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trajectory Weather — proof of concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --sky-top: #9fc4cf;
+    --sky-bottom: #e4ecec;
+    --gold: #f6c65b;
+    --gold-glow: rgba(246, 198, 91, .38);
+    --cloud-pale: #f2f6f6;
+    --cloud-mid: #93a2a8;
+    --cloud-storm: #3c4750;
+    --moss-far: #7fa39a;
+    --moss-near: #446354;
+    --ground: #33492e;
+    --panel-glass: rgba(13, 20, 23, .58);
+    --panel-border: rgba(238, 243, 242, .14);
+    --text-light: #eef3f2;
+    --text-muted: #aebdba;
+    --accent-good: #7fd9a0;
+    --accent-bad: #c76a4f;
+    --focus-ring: #f6c65b;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--sky-bottom);
+    font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    color: var(--text-light);
+  }
+
+  canvas#scene {
+    position: fixed;
+    inset: 0;
+    display: block;
+  }
+
+  .epigraph {
+    position: fixed;
+    top: 34px;
+    left: 34px;
+    max-width: 360px;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 19px;
+    line-height: 1.5;
+    color: #2c3a3d;
+    text-shadow: 0 1px 12px rgba(255, 255, 255, .5);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 1.4s ease, transform 1.4s ease;
+    pointer-events: none;
+  }
+
+  .epigraph.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .panel {
+    position: fixed;
+    left: 24px;
+    bottom: 24px;
+    width: 300px;
+    padding: 18px 18px 16px;
+    background: var(--panel-glass);
+    border: 1px solid var(--panel-border);
+    border-radius: 16px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 18px 40px rgba(6, 12, 14, .32);
+  }
+
+  .panel-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 16px;
+    letter-spacing: -.01em;
+    margin: 0 0 2px;
+    color: var(--text-light);
+  }
+
+  .panel-sub {
+    margin: 0 0 14px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+
+  .readout-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .metric-value {
+    font-size: 34px;
+    font-weight: 600;
+    letter-spacing: -.02em;
+    line-height: 1;
+  }
+
+  .metric-delta {
+    font-size: 13px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+  }
+
+  .metric-delta.pos { color: var(--accent-good); }
+  .metric-delta.neg { color: var(--accent-bad); }
+  .metric-delta.zero { color: var(--text-muted); }
+
+  .state-label {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+
+  .meter {
+    position: relative;
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      var(--cloud-storm) 0%,
+      var(--cloud-mid) 30%,
+      var(--cloud-pale) 55%,
+      var(--gold) 100%
+    );
+    margin-bottom: 4px;
+  }
+
+  .meter-marker {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    border-radius: 50%;
+    background: var(--text-light);
+    border: 2px solid var(--panel-glass);
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    transform: translateY(-50%);
+    transition: left .25s ease;
+  }
+
+  .meter-ticks {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9.5px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    padding: 0 1px;
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    margin-bottom: 10px;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-light);
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid var(--panel-border);
+    border-radius: 9px;
+    padding: 9px 6px;
+    cursor: pointer;
+    transition: background .15s ease, transform .1s ease;
+  }
+
+  button:hover { background: rgba(255, 255, 255, .13); }
+  button:active { transform: translateY(1px); }
+
+  button:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  button.good { border-color: rgba(127, 217, 160, .35); }
+  button.good:hover { background: rgba(127, 217, 160, .16); }
+  button.bad { border-color: rgba(199, 106, 79, .35); }
+  button.bad:hover { background: rgba(199, 106, 79, .18); }
+
+  .bottom-row {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+
+  .bottom-row button.random { flex: 1; }
+
+  .auto-toggle {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid var(--panel-border);
+    border-radius: 9px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .switch {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .slider {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, .18);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .2s ease;
+  }
+
+  .slider::before {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 2px;
+    top: 2px;
+    background: var(--text-light);
+    border-radius: 50%;
+    transition: transform .2s ease;
+  }
+
+  .switch input:checked + .slider {
+    background: var(--accent-good);
+  }
+
+  .switch input:checked + .slider::before {
+    transform: translateX(14px);
+  }
+
+  .switch input:focus-visible + .slider {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 640px) {
+    .epigraph { display: none; }
+    .panel {
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      width: auto;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .epigraph { transition: opacity .01s linear; }
+    button, .slider, .slider::before, .meter-marker { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+
+<p class="epigraph" id="epigraph">The future can still be changed.<br>The past cannot.</p>
+
+<section class="panel" aria-label="Trajectory weather diagnostics">
+  <p class="panel-title">Trajectory weather</p>
+  <p class="panel-sub">Diagnostic panel · abstract metric demo</p>
+
+  <div class="readout-row">
+    <span class="metric-value" id="metricValue">0.50</span>
+    <span class="metric-delta zero" id="metricDelta">±0.00</span>
+  </div>
+  <p class="state-label" id="stateLabel">steady clouds</p>
+
+  <div class="meter">
+    <div class="meter-marker" id="meterMarker" style="left: 50%;"></div>
+  </div>
+  <div class="meter-ticks">
+    <span>storm</span>
+    <span>heavy</span>
+    <span>steady</span>
+    <span>clearing</span>
+    <span>clear</span>
+  </div>
+
+  <div class="controls">
+    <button class="good" id="btnSmallGain">Small gain</button>
+    <button class="bad" id="btnSmallSetback">Small setback</button>
+    <button class="good" id="btnBigGain">Big gain</button>
+    <button class="bad" id="btnBigSetback">Big setback</button>
+  </div>
+
+  <div class="bottom-row">
+    <button class="random" id="btnRandom">Randomize</button>
+    <label class="auto-toggle">
+      Auto-simulate
+      <span class="switch">
+        <input type="checkbox" id="autoToggle" checked>
+        <span class="slider"></span>
+      </span>
+    </label>
+  </div>
+</section>
+
+<script>
+(function () {
+  "use strict";
+
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---------------------------------------------------------------
+  // Utilities
+  // ---------------------------------------------------------------
+  function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function randRange(min, max) { return min + Math.random() * (max - min); }
+  function smoothstep(edge0, edge1, x) {
+    var t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  function hexToRgb(hex) {
+    var v = parseInt(hex.replace("#", ""), 16);
+    return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
+  }
+  function rgbToCss(rgb, alpha) {
+    return "rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + "," + alpha + ")";
+  }
+  function lerpRgb(a, b, t) {
+    return {
+      r: lerp(a.r, b.r, t),
+      g: lerp(a.g, b.g, t),
+      b: lerp(a.b, b.b, t)
+    };
+  }
+
+  // ---------------------------------------------------------------
+  // 1. Metric source
+  // ---------------------------------------------------------------
+  var MetricSource = {
+    value: 0.5,
+    lastDelta: 0,
+
+    applyDelta: function (d) {
+      var next = clamp(this.value + d, 0, 1);
+      this.lastDelta = next - this.value;
+      this.value = next;
+      onMetricChanged();
+    },
+
+    randomize: function () {
+      this.applyDelta(randRange(-0.25, 0.25));
+    }
+  };
+
+  // ---------------------------------------------------------------
+  // 2. Weather model — pure mapping from metric to state
+  // ---------------------------------------------------------------
+  var WEATHER_STATES = [
+    {
+      key: "storm", label: "storm", index: 0,
+      color: "#3c4750", opacityMid: 0.72, sizeMid: 96,
+      vxRange: [42, 56], spawnMs: [260, 440], rain: true
+    },
+    {
+      key: "heavy", label: "heavy clouds", index: 1,
+      color: "#556169", opacityMid: 0.58, sizeMid: 74,
+      vxRange: [34, 46], spawnMs: [520, 760], rain: true
+    },
+    {
+      key: "steady", label: "steady clouds", index: 2,
+      color: "#93a2a8", opacityMid: 0.40, sizeMid: 54,
+      vxRange: [26, 36], spawnMs: [820, 1150], rain: false
+    },
+    {
+      key: "clearing", label: "clearing", index: 3,
+      color: "#d6e0e0", opacityMid: 0.20, sizeMid: 36,
+      vxRange: [20, 28], spawnMs: [1500, 2100], rain: false
+    },
+    {
+      key: "clear", label: "clear", index: 4,
+      color: "#f2f6f6", opacityMid: 0.07, sizeMid: 22,
+      vxRange: [16, 22], spawnMs: [4200, 7000], rain: false
+    }
+  ];
+
+  var WeatherModel = {
+    thresholds: { storm: 0.20, heavy: 0.40, steady: 0.60, clearing: 0.78 },
+
+    stateFor: function (metric) {
+      if (metric < this.thresholds.storm) return WEATHER_STATES[0];
+      if (metric < this.thresholds.heavy) return WEATHER_STATES[1];
+      if (metric < this.thresholds.steady) return WEATHER_STATES[2];
+      if (metric < this.thresholds.clearing) return WEATHER_STATES[3];
+      return WEATHER_STATES[4];
+    }
+  };
+
+  // ---------------------------------------------------------------
+  // 3 & 4. Staging system (mutable) and History system (immutable)
+  // ---------------------------------------------------------------
+  var canvas = document.getElementById("scene");
+  var ctx = canvas.getContext("2d");
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  var W = 0, H = 0;          // CSS pixel dimensions
+  var commitX = 0;           // x position of the commit boundary
+
+  var StagingSystem = {
+    elements: [],
+    spawnTimer: 0,
+
+    reset: function () { this.elements = []; this.spawnTimer = 0; },
+
+    spawnOne: function (stateParams, xOverride) {
+      var vx = randRange(stateParams.vxRange[0], stateParams.vxRange[1]);
+      var size = stateParams.sizeMid * randRange(0.75, 1.25);
+      var el = {
+        x: xOverride !== undefined ? xOverride : W + randRange(20, 160),
+        y: randRange(H * 0.08, H * 0.42),
+        size: size,
+        opacity: stateParams.opacityMid * randRange(0.7, 1.1),
+        colorHex: stateParams.color,
+        vx: vx,
+        rain: stateParams.rain,
+        bobPhase: Math.random() * Math.PI * 2,
+        bobAmp: (stateParams.rain ? 7 : 4) * randRange(0.6, 1.3),
+        bobSpeed: randRange(0.4, 0.8),
+        seed: Math.random()
+      };
+      this.elements.push(el);
+    },
+
+    update: function (dt, currentState, time) {
+      // spawn new elements at the rate implied by the live state
+      this.spawnTimer -= dt * 1000;
+      if (this.spawnTimer <= 0) {
+        this.spawnOne(currentState);
+        this.spawnTimer = randRange(currentState.spawnMs[0], currentState.spawnMs[1]);
+      }
+
+      var targetRgb = hexToRgb(currentState.color);
+      var keep = [];
+
+      for (var i = 0; i < this.elements.length; i++) {
+        var el = this.elements[i];
+
+        // continuously morph toward the live weather state while mutable
+        var rgb = hexToRgb(el.colorHex);
+        var blended = lerpRgb(rgb, targetRgb, Math.min(1, dt * 1.1));
+        el.colorHex = "#" +
+          Math.round(blended.r).toString(16).padStart(2, "0") +
+          Math.round(blended.g).toString(16).padStart(2, "0") +
+          Math.round(blended.b).toString(16).padStart(2, "0");
+        el.opacity = lerp(el.opacity, currentState.opacityMid, Math.min(1, dt * 1.1));
+        el.size = lerp(el.size, currentState.sizeMid, Math.min(1, dt * 0.6));
+        el.rain = currentState.rain;
+
+        el.x -= el.vx * dt;
+
+        if (el.x <= commitX) {
+          // freeze this element's current appearance and hand it to history
+          HistorySystem.commit(el);
+        } else {
+          keep.push(el);
+        }
+      }
+      this.elements = keep;
+    }
+  };
+
+  var HistorySystem = {
+    elements: [],
+
+    commit: function (el) {
+      this.elements.push({
+        x: el.x, y: el.y, size: el.size, opacity: el.opacity,
+        colorHex: el.colorHex, vx: el.vx, rain: el.rain,
+        bobPhase: el.bobPhase, bobAmp: el.bobAmp, bobSpeed: el.bobSpeed,
+        seed: el.seed
+      });
+    },
+
+    update: function (dt) {
+      var keep = [];
+      for (var i = 0; i < this.elements.length; i++) {
+        var el = this.elements[i];
+        el.x -= el.vx * dt;
+        if (el.x > -160) keep.push(el);
+      }
+      this.elements = keep;
+    },
+
+    reset: function () { this.elements = []; }
+  };
+
+  // Pre-populate so the scene doesn't start empty (feels continuous
+  // per the "maintain enough future weather" requirement).
+  function seedInitialWeather() {
+    HistorySystem.reset();
+    StagingSystem.reset();
+    var n = Math.max(10, Math.floor(W / 130));
+    for (var i = 0; i < n; i++) {
+      var x = (i / n) * (commitX + 200) - 100;
+      var st = WEATHER_STATES[2]; // start life as steady clouds
+      StagingSystem.spawnOne(st, x);
+    }
+    // immediately commit anything left of the boundary so history
+    // isn't empty on first paint
+    var keep = [];
+    for (var j = 0; j < StagingSystem.elements.length; j++) {
+      var el = StagingSystem.elements[j];
+      if (el.x <= commitX) HistorySystem.commit(el);
+      else keep.push(el);
+    }
+    StagingSystem.elements = keep;
+  }
+
+  // ---------------------------------------------------------------
+  // Positive-event particles (independent of weather, always positive)
+  // ---------------------------------------------------------------
+  var PositiveEvents = {
+    particles: [],
+
+    burst: function (count) {
+      for (var i = 0; i < count; i++) {
+        this.particles.push({
+          x: randRange(W * 0.15, W * 0.85),
+          y: H * randRange(0.62, 0.82),
+          vy: randRange(18, 30),
+          drift: randRange(-6, 6),
+          life: 0,
+          maxLife: randRange(1.6, 2.6),
+          size: randRange(2.2, 4),
+          hue: randRange(42, 58)
+        });
+      }
+    },
+
+    update: function (dt) {
+      var keep = [];
+      for (var i = 0; i < this.particles.length; i++) {
+        var p = this.particles[i];
+        p.life += dt;
+        p.y -= p.vy * dt;
+        p.x += p.drift * dt;
+        if (p.life < p.maxLife) keep.push(p);
+      }
+      this.particles = keep;
+    }
+  };
+
+  // ---------------------------------------------------------------
+  // Landscape (static, cached — independent of the metric)
+  // ---------------------------------------------------------------
+  var backdropCanvas = document.createElement("canvas");
+  var backdropCtx = backdropCanvas.getContext("2d");
+  var foregroundCanvas = document.createElement("canvas");
+  var foregroundCtx = foregroundCanvas.getContext("2d");
+  var ridgeSeedBack = [];
+  var ridgeSeedFront = [];
+  var treeSeed = [];
+
+  function buildRidge(seedArr, count) {
+    if (seedArr.length === 0) {
+      for (var i = 0; i <= count; i++) {
+        seedArr.push(Math.random());
+      }
+    }
+    return seedArr;
+  }
+
+  function drawBackdrop() {
+    backdropCanvas.width = W * dpr;
+    backdropCanvas.height = H * dpr;
+    backdropCanvas.style.width = W + "px";
+    backdropCanvas.style.height = H + "px";
+    backdropCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // sky
+    var sky = backdropCtx.createLinearGradient(0, 0, 0, H * 0.7);
+    sky.addColorStop(0, "#9fc4cf");
+    sky.addColorStop(1, "#e4ecec");
+    backdropCtx.fillStyle = sky;
+    backdropCtx.fillRect(0, 0, W, H);
+
+    // back mountains
+    var seedsBack = buildRidge(ridgeSeedBack, 10);
+    drawRidge(backdropCtx, seedsBack, H * 0.66, H * 0.16, "#9fc0b8", 0.85);
+
+    // front mountains
+    var seedsFront = buildRidge(ridgeSeedFront, 12);
+    drawRidge(backdropCtx, seedsFront, H * 0.72, H * 0.13, "#7fa39a", 1);
+  }
+
+  function drawRidge(c, seeds, baseY, amp, color, alpha) {
+    c.globalAlpha = alpha;
+    c.fillStyle = color;
+    c.beginPath();
+    c.moveTo(0, H);
+    var step = W / (seeds.length - 1);
+    c.lineTo(0, baseY - seeds[0] * amp);
+    for (var i = 1; i < seeds.length; i++) {
+      var x = i * step;
+      var y = baseY - seeds[i] * amp;
+      var prevX = (i - 1) * step;
+      var prevY = baseY - seeds[i - 1] * amp;
+      var cx = (prevX + x) / 2;
+      c.quadraticCurveTo(prevX, prevY, cx, (prevY + y) / 2);
+    }
+    c.lineTo(W, baseY);
+    c.lineTo(W, H);
+    c.closePath();
+    c.fill();
+    c.globalAlpha = 1;
+  }
+
+  function drawForeground() {
+    foregroundCanvas.width = W * dpr;
+    foregroundCanvas.height = H * dpr;
+    foregroundCanvas.style.width = W + "px";
+    foregroundCanvas.style.height = H + "px";
+    foregroundCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    foregroundCtx.clearRect(0, 0, W, H);
+
+    var groundTop = H * 0.78;
+    var ground = foregroundCtx.createLinearGradient(0, groundTop, 0, H);
+    ground.addColorStop(0, "#446354");
+    ground.addColorStop(1, "#2c4326");
+    foregroundCtx.fillStyle = ground;
+    foregroundCtx.fillRect(0, groundTop, W, H - groundTop);
+
+    // trees along the horizon line
+    if (treeSeed.length === 0) {
+      var count = Math.max(6, Math.floor(W / 140));
+      for (var i = 0; i < count; i++) {
+        treeSeed.push({
+          x: Math.random(),
+          scale: randRange(0.55, 1.15),
+          dark: Math.random() > 0.5
+        });
+      }
+    }
+    for (var t = 0; t < treeSeed.length; t++) {
+      var ts = treeSeed[t];
+      var tx = ts.x * W;
+      var ty = groundTop + 6;
+      drawTree(foregroundCtx, tx, ty, 46 * ts.scale, ts.dark ? "#2f4a30" : "#3f5f3a");
+    }
+  }
+
+  function drawTree(c, x, y, h, color) {
+    c.fillStyle = color;
+    var w = h * 0.55;
+    c.beginPath();
+    c.moveTo(x, y - h);
+    c.lineTo(x - w * 0.5, y - h * 0.35);
+    c.lineTo(x - w * 0.32, y - h * 0.35);
+    c.lineTo(x - w * 0.62, y + h * 0.08);
+    c.lineTo(x - w * 0.4, y + h * 0.08);
+    c.lineTo(x - w * 0.7, y + h * 0.42);
+    c.lineTo(x + w * 0.7, y + h * 0.42);
+    c.lineTo(x + w * 0.4, y + h * 0.08);
+    c.lineTo(x + w * 0.62, y + h * 0.08);
+    c.lineTo(x + w * 0.32, y - h * 0.35);
+    c.lineTo(x + w * 0.5, y - h * 0.35);
+    c.closePath();
+    c.fill();
+    c.fillStyle = "rgba(0,0,0,.18)";
+    c.fillRect(x - 3, y + h * 0.42, 6, h * 0.12);
+  }
+
+  // ---------------------------------------------------------------
+  // Sun — the one fixed environmental element
+  // ---------------------------------------------------------------
+  var Sun = {
+    opacity: 0,
+    targetOpacity: 0,
+    x: 0, y: 0, r: 0,
+
+    layout: function () {
+      this.x = W * 0.78;
+      this.y = H * 0.20;
+      this.r = Math.min(W, H) * 0.055;
+    },
+
+    update: function (metric, dt) {
+      var t = smoothstep(0.55, 0.85, metric);
+      this.targetOpacity = t;
+      this.opacity = lerp(this.opacity, this.targetOpacity, Math.min(1, dt * 1.4));
+    },
+
+    draw: function (c) {
+      if (this.opacity < 0.01) return;
+      c.save();
+      c.globalAlpha = this.opacity;
+      var glow = c.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.r * 3.2);
+      glow.addColorStop(0, "rgba(246,198,91,.55)");
+      glow.addColorStop(1, "rgba(246,198,91,0)");
+      c.fillStyle = glow;
+      c.beginPath();
+      c.arc(this.x, this.y, this.r * 3.2, 0, Math.PI * 2);
+      c.fill();
+
+      c.fillStyle = "#f6c65b";
+      c.beginPath();
+      c.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+  };
+
+  // ---------------------------------------------------------------
+  // Renderer
+  // ---------------------------------------------------------------
+  function drawCloud(c, el, time) {
+    var y = el.y + Math.sin(time * el.bobSpeed + el.bobPhase) * (reduceMotion ? 0 : el.bobAmp);
+    var rgb = hexToRgb(el.colorHex);
+
+    c.save();
+    c.globalAlpha = el.opacity;
+    var grad = c.createRadialGradient(el.x, y, 0, el.x, y, el.size);
+    grad.addColorStop(0, rgbToCss(rgb, 1));
+    grad.addColorStop(1, rgbToCss(rgb, 0));
+    c.fillStyle = grad;
+
+    // cluster of soft blobs for an organic cloud silhouette
+    c.beginPath();
+    c.arc(el.x, y, el.size * 0.55, 0, Math.PI * 2);
+    c.arc(el.x - el.size * 0.5, y + el.size * 0.12, el.size * 0.4, 0, Math.PI * 2);
+    c.arc(el.x + el.size * 0.5, y + el.size * 0.1, el.size * 0.42, 0, Math.PI * 2);
+    c.arc(el.x + el.size * 0.15, y - el.size * 0.22, el.size * 0.36, 0, Math.PI * 2);
+    c.fill();
+
+    if (el.rain && el.opacity > 0.3) {
+      c.globalAlpha = el.opacity * 0.35;
+      c.strokeStyle = rgbToCss(rgb, 1);
+      c.lineWidth = 1.4;
+      for (var k = 0; k < 4; k++) {
+        var rx = el.x - el.size * 0.4 + k * (el.size * 0.28);
+        var ry = y + el.size * 0.35;
+        c.beginPath();
+        c.moveTo(rx, ry);
+        c.lineTo(rx - 5, ry + 16);
+        c.stroke();
+      }
+    }
+    c.restore();
+  }
+
+  function drawPositiveParticles(c) {
+    for (var i = 0; i < PositiveEvents.particles.length; i++) {
+      var p = PositiveEvents.particles[i];
+      var t = p.life / p.maxLife;
+      var alpha = (1 - t) * 0.9;
+      c.save();
+      c.globalAlpha = alpha;
+      c.fillStyle = "hsl(" + p.hue + ", 90%, 72%)";
+      c.shadowColor = "hsla(" + p.hue + ", 95%, 70%, .9)";
+      c.shadowBlur = 8;
+      c.beginPath();
+      c.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+  }
+
+  function render(time) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(backdropCanvas, 0, 0, W, H);
+
+    Sun.draw(ctx);
+
+    for (var i = 0; i < HistorySystem.elements.length; i++) {
+      drawCloud(ctx, HistorySystem.elements[i], time);
+    }
+    for (var j = 0; j < StagingSystem.elements.length; j++) {
+      drawCloud(ctx, StagingSystem.elements[j], time);
+    }
+
+    drawPositiveParticles(ctx);
+    ctx.drawImage(foregroundCanvas, 0, 0, W, H);
+  }
+
+  // ---------------------------------------------------------------
+  // UI wiring
+  // ---------------------------------------------------------------
+  var metricValueEl = document.getElementById("metricValue");
+  var metricDeltaEl = document.getElementById("metricDelta");
+  var stateLabelEl = document.getElementById("stateLabel");
+  var meterMarkerEl = document.getElementById("meterMarker");
+
+  function onMetricChanged() {
+    var m = MetricSource.value;
+    metricValueEl.textContent = m.toFixed(2);
+    meterMarkerEl.style.left = (m * 100) + "%";
+
+    var d = MetricSource.lastDelta;
+    var sign = d > 0.0001 ? "+" : (d < -0.0001 ? "" : "±");
+    metricDeltaEl.textContent = sign + d.toFixed(2);
+    metricDeltaEl.className = "metric-delta " +
+      (d > 0.0001 ? "pos" : (d < -0.0001 ? "neg" : "zero"));
+
+    var state = WeatherModel.stateFor(m);
+    stateLabelEl.textContent = state.label;
+
+    if (d > 0.0001) {
+      PositiveEvents.burst(d > 0.15 ? 3 : 1);
+    }
+  }
+
+  document.getElementById("btnSmallGain").addEventListener("click", function () {
+    MetricSource.applyDelta(randRange(0.05, 0.09));
+  });
+  document.getElementById("btnBigGain").addEventListener("click", function () {
+    MetricSource.applyDelta(randRange(0.16, 0.24));
+  });
+  document.getElementById("btnSmallSetback").addEventListener("click", function () {
+    MetricSource.applyDelta(-randRange(0.05, 0.09));
+  });
+  document.getElementById("btnBigSetback").addEventListener("click", function () {
+    MetricSource.applyDelta(-randRange(0.16, 0.24));
+  });
+  document.getElementById("btnRandom").addEventListener("click", function () {
+    MetricSource.randomize();
+  });
+
+  var autoToggle = document.getElementById("autoToggle");
+  var autoEnabled = true;
+  var autoTimer = null;
+
+  function scheduleAuto() {
+    if (!autoEnabled) return;
+    var delay = randRange(1800, 3400);
+    autoTimer = setTimeout(function () {
+      MetricSource.applyDelta(randRange(-0.12, 0.12));
+      scheduleAuto();
+    }, delay);
+  }
+
+  autoToggle.addEventListener("change", function () {
+    autoEnabled = autoToggle.checked;
+    if (autoEnabled) {
+      scheduleAuto();
+    } else if (autoTimer) {
+      clearTimeout(autoTimer);
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // Sizing / lifecycle
+  // ---------------------------------------------------------------
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+
+    commitX = W * 0.62;
+
+    ridgeSeedBack = [];
+    ridgeSeedFront = [];
+    treeSeed = [];
+
+    Sun.layout();
+    drawBackdrop();
+    drawForeground();
+    seedInitialWeather();
+  }
+
+  window.addEventListener("resize", resize);
+
+  // ---------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------
+  var lastTs = null;
+
+  function frame(ts) {
+    if (lastTs === null) lastTs = ts;
+    var dt = Math.min(0.05, (ts - lastTs) / 1000);
+    lastTs = ts;
+    var time = ts / 1000;
+
+    var state = WeatherModel.stateFor(MetricSource.value);
+    Sun.update(MetricSource.value, dt);
+    StagingSystem.update(dt, state, time);
+    HistorySystem.update(dt);
+    PositiveEvents.update(dt);
+
+    render(time);
+    requestAnimationFrame(frame);
+  }
+
+  // ---------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------
+  resize();
+  onMetricChanged();
+  requestAnimationFrame(frame);
+  if (autoEnabled) scheduleAuto();
+
+  setTimeout(function () {
+    document.getElementById("epigraph").classList.add("show");
+  }, 300);
+})();
+</script>
+</body>
+</html>
