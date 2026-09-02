@@ -103,6 +103,16 @@
       function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
       function lerp(a, b, t) { return a + (b - a) * t; }
 
+      /**
+       * Deterministic pseudo-random hash for decorrelating cloud properties.
+       * Using the snapshot timestamp keeps each cloud stable when rows are
+       * added or removed, while avoiding correlation with its row position.
+       */
+      function pseudoRandom(seed) {
+        const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+        return x - Math.floor(x);
+      }
+
       function hexToRgb(hex) {
         const v = parseInt(hex.replace('#', ''), 16);
         return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
@@ -285,13 +295,13 @@
         for (let t = 0; t < treeSeed.length; t++) {
           const ts = treeSeed[t];
           // leave a gap around the house at 50% for visual clarity
-          if (ts.x > 0.42 && ts.x < 0.58) continue;
+          if (ts.x > 0.10 && ts.x < 0.26) continue;
           const tx = ts.x * W;
           const ty = groundTop + 6;
           drawTree(foregroundCtx, tx, ty, 46 * ts.scale, ts.dark ? '#2f4a30' : '#3f5f3a');
         }
 
-        drawHouse(foregroundCtx, W * 0.5, groundTop + 6, 100, 120);
+        drawHouse(foregroundCtx, W * 0.18, groundTop + 6, 100, 120);
       }
 
       function getCloudPosition(snapshotTimestamp, now) {
@@ -318,7 +328,8 @@
         c.arc(x + size * 0.15, bobbedY - size * 0.22, size * 0.36, 0, Math.PI * 2);
         c.fill();
 
-        if (rain && opacity > 0.3) {
+        // Only draw rain if cloud is mostly on-screen (avoid off-screen artifacts)
+        if (rain && opacity > 0.3 && x > -100 && x < W + 100) {
           c.globalAlpha = opacity * 0.35;
           c.strokeStyle = rgbToCss(rgb, 1);
           c.lineWidth = 1.4;
@@ -370,18 +381,35 @@
         const now = Date.now();
 
         if (rawData && rawData.rows && rawData.rows.length > 0) {
-          const rows = rawData.rows;
+          // Limit the number of rendered clouds for wide historical ranges.
+          // This is visual downsampling only; rawData remains untouched.
+          const rows = downsampleData(
+            rawData.rows,
+            DOWNSAMPLE_TARGET_BUCKETS
+          );
+
           for (let i = 0; i < rows.length; i++) {
             const snapshotTime = new Date(rows[i][0]).getTime();
             const x = getCloudPosition(snapshotTime, now);
             if (x > -160 && x < W + 160) {
-              // vertical band + size/opacity/color derived from current weather state,
-              // with a per-row seed for stable jitter across frames
-              const seed = (i * 9301 + 49297) % 233280 / 233280;
+              // Derive the seed from the snapshot itself rather than its row
+              // index. This keeps cloud properties stable when data changes
+              // and removes the linear X/Y correlation of the old hash.
+              const seed = pseudoRandom(snapshotTime);
               const y = H * (0.08 + seed * 0.34);
               const size = weather.sizeMid * (0.75 + seed * 0.5);
               const opacity = weather.opacityMid * (0.7 + seed * 0.4);
-              drawCloud(ctx, x, y, size, opacity, weather.color, weather.rain, time, seed);
+              drawCloud(
+                ctx,
+                x,
+                y,
+                size,
+                opacity,
+                weather.color,
+                weather.rain,
+                time,
+                seed
+              );
             }
           }
         }
