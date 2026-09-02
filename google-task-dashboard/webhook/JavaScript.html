@@ -33,6 +33,28 @@
     const ETA_THRESHOLD_GOOD = 14;
     const ETA_THRESHOLD_CAUTION = 30;
 
+    // Trajectory Weather landscape constants
+    const LANDSCAPE_BASELINE_WINDOW_DAYS = 14;
+    const LANDSCAPE_ALL_RANGE_WINDOW_DAYS = 30;
+    const LANDSCAPE_TRANSITION_DURATION_S = 0.8;
+    const LANDSCAPE_METRIC_NEUTRAL = 0.5;
+    const LANDSCAPE_TREND_CENTER = 0.85;
+    const LANDSCAPE_TREND_SCALE = 0.3;
+    const LANDSCAPE_MAX_FRAME_DT = 0.05;
+    const LANDSCAPE_WEATHER_THRESHOLDS = {
+      storm: 0.20,
+      heavy: 0.40,
+      steady: 0.60,
+      clearing: 0.78
+    };
+    const LANDSCAPE_WEATHER_STATES = [
+      { key: 'storm', color: '#3c4750', opacityMid: 0.72, sizeMid: 96, vxRange: [42, 56], spawnMs: [260, 440], rain: true },
+      { key: 'heavy', color: '#556169', opacityMid: 0.58, sizeMid: 74, vxRange: [34, 46], spawnMs: [520, 760], rain: true },
+      { key: 'steady', color: '#93a2a8', opacityMid: 0.40, sizeMid: 54, vxRange: [26, 36], spawnMs: [820, 1150], rain: false },
+      { key: 'clearing', color: '#d6e0e0', opacityMid: 0.20, sizeMid: 36, vxRange: [20, 28], spawnMs: [1500, 2100], rain: false },
+      { key: 'clear', color: '#f2f6f6', opacityMid: 0.07, sizeMid: 22, vxRange: [16, 22], spawnMs: [4200, 7000], rain: false }
+    ];
+
     /**
      * Color definitions for consistent stacked line/area and overlay line visualization.
      */
@@ -56,12 +78,362 @@
       return match[0].length + 1;
     }
 
+    // -----------------------------------------------------------------------
+    // Trajectory Weather — background landscape layer
+    // -----------------------------------------------------------------------
+    const Landscape = (function () {
+      let canvas, ctx;
+      let backdropCanvas, backdropCtx;
+      let foregroundCanvas, foregroundCtx;
+      let dpr = 1;
+      let W = 0, H = 0;
+      let ridgeSeedBack = [];
+      let ridgeSeedFront = [];
+      let treeSeed = [];
+      let lastFrameTs = null;
+      let started = false;
+
+      const state = {
+        currentMetric: LANDSCAPE_METRIC_NEUTRAL,
+        targetMetric: LANDSCAPE_METRIC_NEUTRAL,
+        transitionProgress: 1.0,
+        activeRangeHours: 72 // default 3D, updated by setRangeFilter
+      };
+
+      function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
+      function lerp(a, b, t) { return a + (b - a) * t; }
+
+      function hexToRgb(hex) {
+        const v = parseInt(hex.replace('#', ''), 16);
+        return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
+      }
+      function rgbToCss(rgb, alpha) {
+        return 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',' + alpha + ')';
+      }
+
+      function stateFor(metric) {
+        const t = LANDSCAPE_WEATHER_THRESHOLDS;
+        if (metric < t.storm) return LANDSCAPE_WEATHER_STATES[0];
+        if (metric < t.heavy) return LANDSCAPE_WEATHER_STATES[1];
+        if (metric < t.steady) return LANDSCAPE_WEATHER_STATES[2];
+        if (metric < t.clearing) return LANDSCAPE_WEATHER_STATES[3];
+        return LANDSCAPE_WEATHER_STATES[4];
+      }
+
+      /**
+       * Sets the target metric for the current range. Triggers a smooth
+       * transition rather than snapping. Called from setRangeFilter() and
+       * whenever fresh data loads.
+       */
+      function setTargetMetric(metric) {
+        if (Math.abs(state.targetMetric - metric) > 0.005) {
+          state.targetMetric = metric;
+          state.transitionProgress = 0.0;
+        }
+      }
+
+      function setActiveRangeDays(rangeDays) {
+        const effectiveDays = (rangeDays === 'all') ? LANDSCAPE_ALL_RANGE_WINDOW_DAYS : (Number(rangeDays) || LANDSCAPE_ALL_RANGE_WINDOW_DAYS);
+        state.activeRangeHours = effectiveDays * 24;
+      }
+
+      function updateTransition(dt) {
+        if (state.transitionProgress < 1.0) {
+          state.transitionProgress = Math.min(1.0, state.transitionProgress + dt / LANDSCAPE_TRANSITION_DURATION_S);
+          state.currentMetric = lerp(state.currentMetric, state.targetMetric, state.transitionProgress);
+        }
+      }
+
+      function resize() {
+        if (!canvas) return;
+        W = window.innerWidth;
+        H = window.innerHeight;
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = W + 'px';
+        canvas.style.height = H + 'px';
+
+        ridgeSeedBack = [];
+        ridgeSeedFront = [];
+        treeSeed = [];
+
+        drawBackdrop();
+        drawForeground();
+      }
+
+      function buildRidge(seedArr, count) {
+        if (seedArr.length === 0) {
+          for (let i = 0; i <= count; i++) seedArr.push(Math.random());
+        }
+        return seedArr;
+      }
+
+      function drawRidge(c, seeds, baseY, amp, color, alpha) {
+        c.globalAlpha = alpha;
+        c.fillStyle = color;
+        c.beginPath();
+        c.moveTo(0, H);
+        const step = W / (seeds.length - 1);
+        c.lineTo(0, baseY - seeds[0] * amp);
+        for (let i = 1; i < seeds.length; i++) {
+          const x = i * step;
+          const y = baseY - seeds[i] * amp;
+          const prevX = (i - 1) * step;
+          const prevY = baseY - seeds[i - 1] * amp;
+          const cx = (prevX + x) / 2;
+          c.quadraticCurveTo(prevX, prevY, cx, (prevY + y) / 2);
+        }
+        c.lineTo(W, baseY);
+        c.lineTo(W, H);
+        c.closePath();
+        c.fill();
+        c.globalAlpha = 1;
+      }
+
+      function drawBackdrop() {
+        backdropCanvas.width = W * dpr;
+        backdropCanvas.height = H * dpr;
+        backdropCanvas.style.width = W + 'px';
+        backdropCanvas.style.height = H + 'px';
+        backdropCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const sky = backdropCtx.createLinearGradient(0, 0, 0, H * 0.7);
+        sky.addColorStop(0, '#9fc4cf');
+        sky.addColorStop(1, '#e4ecec');
+        backdropCtx.fillStyle = sky;
+        backdropCtx.fillRect(0, 0, W, H);
+
+        const seedsBack = buildRidge(ridgeSeedBack, 10);
+        drawRidge(backdropCtx, seedsBack, H * 0.66, H * 0.16, '#9fc0b8', 0.85);
+
+        const seedsFront = buildRidge(ridgeSeedFront, 12);
+        drawRidge(backdropCtx, seedsFront, H * 0.72, H * 0.13, '#7fa39a', 1);
+      }
+
+      function drawTree(c, x, y, h, color) {
+        c.fillStyle = color;
+        const w = h * 0.55;
+        c.beginPath();
+        c.moveTo(x, y - h);
+        c.lineTo(x - w * 0.5, y - h * 0.35);
+        c.lineTo(x - w * 0.32, y - h * 0.35);
+        c.lineTo(x - w * 0.62, y + h * 0.08);
+        c.lineTo(x - w * 0.4, y + h * 0.08);
+        c.lineTo(x - w * 0.7, y + h * 0.42);
+        c.lineTo(x + w * 0.7, y + h * 0.42);
+        c.lineTo(x + w * 0.4, y + h * 0.08);
+        c.lineTo(x + w * 0.62, y + h * 0.08);
+        c.lineTo(x + w * 0.32, y - h * 0.35);
+        c.lineTo(x + w * 0.5, y - h * 0.35);
+        c.closePath();
+        c.fill();
+        c.fillStyle = 'rgba(0,0,0,.18)';
+        c.fillRect(x - 3, y + h * 0.42, 6, h * 0.12);
+      }
+
+      function drawHouse(c, x, y, w, h) {
+        c.fillStyle = '#5a7a6e';
+        c.fillRect(x - w / 2, y - h * 0.55, w, h * 0.55);
+
+        c.fillStyle = '#8b6f47';
+        c.beginPath();
+        c.moveTo(x - w / 2, y - h * 0.55);
+        c.lineTo(x, y - h);
+        c.lineTo(x + w / 2, y - h * 0.55);
+        c.closePath();
+        c.fill();
+
+        c.fillStyle = '#3d4a47';
+        c.fillRect(x - 15, y - 40, 30, 40);
+
+        c.fillStyle = '#c9e4e0';
+        c.fillRect(x - w / 2 + 18, y - h * 0.35, 20, 20);
+        c.fillRect(x + w / 2 - 38, y - h * 0.35, 20, 20);
+
+        c.strokeStyle = 'rgba(0,0,0,.15)';
+        c.lineWidth = 2;
+        c.strokeRect(x - w / 2, y - h * 0.55, w, h * 0.55);
+      }
+
+      function drawForeground() {
+        foregroundCanvas.width = W * dpr;
+        foregroundCanvas.height = H * dpr;
+        foregroundCanvas.style.width = W + 'px';
+        foregroundCanvas.style.height = H + 'px';
+        foregroundCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        foregroundCtx.clearRect(0, 0, W, H);
+
+        const groundTop = H * 0.78;
+        const ground = foregroundCtx.createLinearGradient(0, groundTop, 0, H);
+        ground.addColorStop(0, '#446354');
+        ground.addColorStop(1, '#2c4326');
+        foregroundCtx.fillStyle = ground;
+        foregroundCtx.fillRect(0, groundTop, W, H - groundTop);
+
+        if (treeSeed.length === 0) {
+          const count = Math.max(6, Math.floor(W / 140));
+          for (let i = 0; i < count; i++) {
+            treeSeed.push({
+              x: Math.random(),
+              scale: 0.55 + Math.random() * 0.6,
+              dark: Math.random() > 0.5
+            });
+          }
+        }
+        for (let t = 0; t < treeSeed.length; t++) {
+          const ts = treeSeed[t];
+          // leave a gap around the house at 50% for visual clarity
+          if (ts.x > 0.42 && ts.x < 0.58) continue;
+          const tx = ts.x * W;
+          const ty = groundTop + 6;
+          drawTree(foregroundCtx, tx, ty, 46 * ts.scale, ts.dark ? '#2f4a30' : '#3f5f3a');
+        }
+
+        drawHouse(foregroundCtx, W * 0.5, groundTop + 6, 100, 120);
+      }
+
+      function getCloudPosition(snapshotTimestamp, now) {
+        const ageHours = (now - snapshotTimestamp) / (60 * 60 * 1000);
+        const effectiveWidth = W * 1.2;
+        return W - (ageHours / state.activeRangeHours) * effectiveWidth;
+      }
+
+      function drawCloud(c, x, y, size, opacity, colorHex, rain, time, seed) {
+        const bobAmp = rain ? 6 : 3;
+        const bobbedY = y + Math.sin(time * 0.5 + seed * 6.28) * bobAmp;
+        const rgb = hexToRgb(colorHex);
+
+        c.save();
+        c.globalAlpha = opacity;
+        const grad = c.createRadialGradient(x, bobbedY, 0, x, bobbedY, size);
+        grad.addColorStop(0, rgbToCss(rgb, 1));
+        grad.addColorStop(1, rgbToCss(rgb, 0));
+        c.fillStyle = grad;
+        c.beginPath();
+        c.arc(x, bobbedY, size * 0.55, 0, Math.PI * 2);
+        c.arc(x - size * 0.5, bobbedY + size * 0.12, size * 0.4, 0, Math.PI * 2);
+        c.arc(x + size * 0.5, bobbedY + size * 0.1, size * 0.42, 0, Math.PI * 2);
+        c.arc(x + size * 0.15, bobbedY - size * 0.22, size * 0.36, 0, Math.PI * 2);
+        c.fill();
+
+        if (rain && opacity > 0.3) {
+          c.globalAlpha = opacity * 0.35;
+          c.strokeStyle = rgbToCss(rgb, 1);
+          c.lineWidth = 1.4;
+          for (let k = 0; k < 4; k++) {
+            const rx = x - size * 0.4 + k * (size * 0.28);
+            const ry = bobbedY + size * 0.35;
+            c.beginPath();
+            c.moveTo(rx, ry);
+            c.lineTo(rx - 5, ry + 16);
+            c.stroke();
+          }
+        }
+        c.restore();
+      }
+
+      function drawSun(c, metric, time) {
+        const x = W * 0.78;
+        const y = H * 0.20;
+        const r = Math.min(W, H) * 0.055;
+        const t = clamp((metric - 0.55) / 0.30, 0, 1);
+        const eased = t * t * (3 - 2 * t);
+        if (eased < 0.01) return;
+
+        c.save();
+        c.globalAlpha = eased;
+        const glow = c.createRadialGradient(x, y, 0, x, y, r * 3.2);
+        glow.addColorStop(0, 'rgba(246,198,91,.55)');
+        glow.addColorStop(1, 'rgba(246,198,91,0)');
+        c.fillStyle = glow;
+        c.beginPath();
+        c.arc(x, y, r * 3.2, 0, Math.PI * 2);
+        c.fill();
+
+        c.fillStyle = '#f6c65b';
+        c.beginPath();
+        c.arc(x, y, r, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+
+      function render(time) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        ctx.drawImage(backdropCanvas, 0, 0, W, H);
+
+        drawSun(ctx, state.currentMetric, time);
+
+        const weather = stateFor(state.currentMetric);
+        const now = Date.now();
+
+        if (rawData && rawData.rows && rawData.rows.length > 0) {
+          const rows = rawData.rows;
+          for (let i = 0; i < rows.length; i++) {
+            const snapshotTime = new Date(rows[i][0]).getTime();
+            const x = getCloudPosition(snapshotTime, now);
+            if (x > -160 && x < W + 160) {
+              // vertical band + size/opacity/color derived from current weather state,
+              // with a per-row seed for stable jitter across frames
+              const seed = (i * 9301 + 49297) % 233280 / 233280;
+              const y = H * (0.08 + seed * 0.34);
+              const size = weather.sizeMid * (0.75 + seed * 0.5);
+              const opacity = weather.opacityMid * (0.7 + seed * 0.4);
+              drawCloud(ctx, x, y, size, opacity, weather.color, weather.rain, time, seed);
+            }
+          }
+        }
+
+        ctx.drawImage(foregroundCanvas, 0, 0, W, H);
+      }
+
+      function frame(ts) {
+        if (lastFrameTs === null) lastFrameTs = ts;
+        const dt = Math.min(LANDSCAPE_MAX_FRAME_DT, (ts - lastFrameTs) / 1000);
+        lastFrameTs = ts;
+
+        updateTransition(dt);
+        render(ts / 1000);
+
+        requestAnimationFrame(frame);
+      }
+
+      function init() {
+        canvas = document.getElementById('trajectoryWeather');
+        if (!canvas) return; // graceful no-op if canvas absent
+        ctx = canvas.getContext('2d');
+
+        backdropCanvas = document.createElement('canvas');
+        backdropCtx = backdropCanvas.getContext('2d');
+        foregroundCanvas = document.createElement('canvas');
+        foregroundCtx = foregroundCanvas.getContext('2d');
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        if (!started) {
+          started = true;
+          requestAnimationFrame(frame);
+        }
+      }
+
+      return {
+        init: init,
+        setTargetMetric: setTargetMetric,
+        setActiveRangeDays: setActiveRangeDays
+      };
+    })();
+
+
     /**
      * Initializes Google Charts, notifications container, and fetches dashboard metrics.
      */
     function init() {
       initNotifications();
       initAdminLink();
+      Landscape.init();
       google.charts.load('current', { packages: ['corechart'] });
       google.charts.setOnLoadCallback(fetchData);
       setupResizeHandler();
@@ -296,6 +668,9 @@
       updateKPIsAndStaleness();
       renderCharts();
       renderTopOverdueTasks(data.topOverdueTasksTopX || []);
+
+      Landscape.setActiveRangeDays(activeRangeDays);
+      Landscape.setTargetMetric(calculateMetricForRange(rawData.rows, activeRangeDays === 'all' ? LANDSCAPE_ALL_RANGE_WINDOW_DAYS : activeRangeDays));
     }
 
     /**
@@ -575,6 +950,58 @@
           counts.style.display = 'none';
         }
       }
+    }
+
+    /**
+     * Computes the trajectory-weather metric for a given display range, using a
+     * fixed 14-day baseline (or all available history if shorter) as the stable
+     * reference point. Only the "recent" window scales with the selected range;
+     * the baseline never does. See landscape-extension-design-brief.md section 2.
+     * @param {Array<Array<any>>} rows - Snapshot rows [timestamp, open, completed, overdue, severity]
+     * @param {number} rangeDays - Active display range in days (30 substituted for 'all')
+     * @return {number} - Metric in [0, 1], where 0.5 is neutral/steady
+     */
+    function calculateMetricForRange(rows, rangeDays) {
+      if (!rows || rows.length < 2) return LANDSCAPE_METRIC_NEUTRAL;
+
+      const now = Date.now();
+
+      // Determine baseline window: 14 days, or all available history if shorter.
+      const earliestTime = new Date(rows[0][0]).getTime();
+      const availableHistoryDays = (now - earliestTime) / MS_PER_DAY;
+      const baselineWindowDays = Math.min(LANDSCAPE_BASELINE_WINDOW_DAYS, Math.max(1, availableHistoryDays));
+
+      const sumPositiveDeltas = (windowDays) => {
+        const cutoff = now - windowDays * MS_PER_DAY;
+        const windowRows = rows.filter(r => new Date(r[0]).getTime() >= cutoff);
+        if (windowRows.length < 2) return { total: 0, elapsedDays: 0 };
+
+        let total = 0;
+        for (let i = 1; i < windowRows.length; i++) {
+          const delta = windowRows[i][2] - windowRows[i - 1][2];
+          if (delta > 0) total += delta;
+        }
+        const oldest = new Date(windowRows[0][0]).getTime();
+        const newest = new Date(windowRows[windowRows.length - 1][0]).getTime();
+        const elapsedDays = Math.max(1, newest - oldest) / MS_PER_DAY;
+        return { total: total, elapsedDays: elapsedDays };
+      };
+
+      const baseline = sumPositiveDeltas(baselineWindowDays);
+      const recent = sumPositiveDeltas(rangeDays);
+
+      if (baseline.total <= 0 || baseline.elapsedDays <= 0) {
+        return LANDSCAPE_METRIC_NEUTRAL;
+      }
+
+      const velocityBaseline = baseline.total / baseline.elapsedDays;
+      const velocityRecent = recent.total / recent.elapsedDays;
+
+      if (velocityBaseline <= 0) return LANDSCAPE_METRIC_NEUTRAL;
+
+      const trendRatio = velocityRecent / velocityBaseline;
+      const metric = (trendRatio - LANDSCAPE_TREND_CENTER) / LANDSCAPE_TREND_SCALE;
+      return Math.max(0, Math.min(1, metric));
     }
 
     /**
@@ -993,6 +1420,10 @@
       if (rawData && rawData.rows && rawData.rows.length > 0) {
         calculateVelocity(rawData.rows);
         updateBacklogEstimate(rawData.rows);
+
+        const effectiveRangeDays = (activeRangeDays === 'all') ? LANDSCAPE_ALL_RANGE_WINDOW_DAYS : activeRangeDays;
+        Landscape.setActiveRangeDays(activeRangeDays);
+        Landscape.setTargetMetric(calculateMetricForRange(rawData.rows, effectiveRangeDays));
       }
 
       renderCharts();
