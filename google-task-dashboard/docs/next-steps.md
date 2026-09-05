@@ -241,6 +241,32 @@ of the dashboard data request and displays only the Top 3.
 
 ---
 
+### 10. Replace timestamp debounce with LockService mutex
+
+📋 **Planned**
+
+**Implementation:** Replace the fake timestamp-based `acquireSyncLock()` cooldown with a real `LockService.getScriptLock()` mutual exclusion lock. Use `tryLock(timeoutMs)` with explicit timeout checks and structured error returns (no exceptions), matching existing `{success, error}` response shape. Split `ingestTaskMetrics()` into an unlocked internal version to avoid reentrancy risk when `deleteOldCompletedTasks()` calls it post-deletion. Apply locking to all mutation entry points: `ingestTaskMetrics()`, `deleteOldCompletedTasks()`, `compressSheetData()` (prune/downsample). Use two timeout tiers: 5s for interactive operations (user-clicked), 10s for automated triggers (auto-sync cron).
+
+**Implementation details:**
+- Create `withScriptLock(timeoutMs, callback)` helper: acquires lock via `tryLock()`, executes callback in try/finally, calls `SpreadsheetApp.flush()` before release, returns structured response on timeout.
+- Split `ingestTaskMetrics()` into:
+  - `ingestTaskMetricsInternal()` — actual logic, assumes caller holds the lock, no locking wrapper.
+  - `ingestTaskMetrics()` — thin public wrapper calling `withScriptLock(TIMEOUT_INTERACTIVE_MS, ingestTaskMetricsInternal)`.
+- Update `deleteOldCompletedTasks()` to call `ingestTaskMetricsInternal()` (not the wrapper) for its post-deletion snapshot refresh.
+- Wrap `deleteOldCompletedTasks()`, `compressSheetData()` bodies with `withScriptLock()`.
+- Define constants: `TIMEOUT_INTERACTIVE_MS = 5000`, `TIMEOUT_TRIGGER_MS = 10000`.
+- Auto-trigger: on lock timeout, log and skip silently (retry next cycle in 3 hours) rather than fail the user-facing call.
+- Remove old debounce code: `acquireSyncLock()`, `releaseSyncLock()`, `LAST_SYNC_PROP_KEY`, `SYNC_LOCK_COOLDOWN_MS`.
+
+**Changes:**
+- [pending implementation]
+
+**Files:** Code.js
+
+**Effort:** M
+
+---
+
 ## Feature requests
 
 - at the bottom of the dashboard: add a text field that can be copied from 
