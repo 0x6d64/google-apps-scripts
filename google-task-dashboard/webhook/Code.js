@@ -3,15 +3,15 @@
  */
 
 const SPREADSHEET_PROP_KEY = 'SPREADSHEET_ID';
-const LAST_SYNC_PROP_KEY = 'LAST_SYNC_TIME';
 const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
-const SYNC_LOCK_COOLDOWN_MS = 10000; // 10 seconds debounce lock
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
 const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
 const TOP_OVERDUE_ITEMS = 5;
 const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity'];
 const OVERDUE_HOUR = 21;
 const DEFAULT_TIMEZONE = 'Europe/Bucharest';
+const TIMEOUT_INTERACTIVE_MS = 5000; // 5s for user-clicked operations
+const TIMEOUT_TRIGGER_MS = 10000; // 10s for automated triggers
 
 /**
  * Serves the web dashboard HTML interface.
@@ -34,6 +34,43 @@ function doGet() {
  */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
+ * Executes a callback while holding a script-level mutex lock.
+ * Uses LockService for true mutual exclusion across all executions.
+ * Automatically flushes spreadsheet before releasing the lock.
+ * @param {number} timeoutMs - Timeout in milliseconds for lock acquisition
+ * @param {Function} callback - Function to execute while holding the lock
+ * @return {Object} - {success: true, result: callback_result} or {success: false, error: string}
+ */
+function withScriptLock(timeoutMs, callback) {
+  const lock = LockService.getScriptLock();
+  
+  if (!lock.tryLock(timeoutMs)) {
+    return {
+      success: false,
+      error: 'Another sync or maintenance operation is already running. Try again shortly.'
+    };
+  }
+
+  try {
+    const result = callback();
+    // Flush any pending Spreadsheet operations before releasing the lock
+    SpreadsheetApp.flush();
+    return {
+      success: true,
+      result: result
+    };
+  } catch (err) {
+    Logger.log('Error during locked operation: ' + err);
+    return {
+      success: false,
+      error: (err && (err.message || err.toString())) || 'Unknown error during operation'
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -229,7 +266,12 @@ function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
   return new Date(Date.UTC(year, month, day, overdueHour, 0, 0));
 }
 
-function ingestTaskMetrics() {
+/**
+ * Internal metrics ingestion logic (assumes caller holds the lock).
+ * Fetches all tasks, calculates metrics, persists snapshot and top overdue.
+ * @return {Object} - snapshot object {timestamp, open, completed, overdue, overdue_severity}
+ */
+function ingestTaskMetricsInternal() {
   const now = new Date();
   const sixMonthsCutoff = new Date(now);
   sixMonthsCutoff.setMonth(sixMonthsCutoff.getMonth() + 6);
@@ -309,6 +351,16 @@ function ingestTaskMetrics() {
   updateTopOverdueSheet(topTen);
 
   return snapshot;
+}
+
+/**
+ * Public entry point for metrics ingestion (locking wrapper).
+ * Acquires script lock before delegating to ingestTaskMetricsInternal.
+ * Used by manual sync trigger and automated background sync.
+ * @return {Object} - {success: true, result: snapshot} or {success: false, error: string}
+ */
+function ingestTaskMetrics() {
+  return withScriptLock(TIMEOUT_TRIGGER_MS, ingestTaskMetricsInternal);
 }
 
 /**
@@ -431,28 +483,24 @@ function getTopOverdueTasksTopX() {
 }
 
 /**
- * Concurrency-safe manual sync.
- * @return {Object} Refreshed dashboard data.
+ * Concurrency-safe manual sync (interactive entry point).
+ * @return {Object} Refreshed dashboard data or error.
  */
 function syncNow() {
-  acquireSyncLock();
-  try {
-    ingestTaskMetrics();
+  return withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+    ingestTaskMetricsInternal();
     return getDashboardData();
-  } finally {
-    releaseSyncLock();
-  }
+  });
 }
 
 /**
- * Concurrency-safe Sync and Clear ALL completed tasks across all lists.
- * @return {Object} Refreshed dashboard data.
+ * Concurrency-safe Sync and Clear ALL completed tasks across all lists (interactive entry point).
+ * @return {Object} Refreshed dashboard data or error.
  */
 function syncAndClearTasks() {
-  acquireSyncLock();
-  try {
+  return withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
     // 1. Ingest metrics first for safe persistence
-    ingestTaskMetrics();
+    ingestTaskMetricsInternal();
 
     // 2. Clear completed tasks in each task list
     const taskListsResult = Tasks.Tasklists.list();
@@ -467,9 +515,7 @@ function syncAndClearTasks() {
     }
 
     return getDashboardData();
-  } finally {
-    releaseSyncLock();
-  }
+  });
 }
 
 /**
@@ -481,11 +527,10 @@ function syncAndClearTasks() {
 function deleteOldCompletedTasks(cutoffWeeks) {
   const startTime = Date.now();
   const weeks = (typeof cutoffWeeks === 'number' && cutoffWeeks > 0) ? cutoffWeeks : 8;
-  const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
-  const cutoffDate = new Date(startTime - cutoffMs);
-
-  acquireSyncLock();
-  try {
+  
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+    const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(startTime - cutoffMs);
     let totalDeleted = 0;
 
     forEachTaskInAllLists((task, listId, listTitle) => {
@@ -514,7 +559,7 @@ function deleteOldCompletedTasks(cutoffWeeks) {
       }
     });
 
-    ingestTaskMetrics();
+    ingestTaskMetricsInternal();
     const dashboardData = getDashboardData();
     const durationMs = Date.now() - startTime;
 
@@ -526,17 +571,19 @@ function deleteOldCompletedTasks(cutoffWeeks) {
       durationMs: durationMs,
       data: dashboardData
     };
-  } catch (err) {
-    Logger.log('[DELETE_OLD] Error: ' + err);
+  });
+
+  // Unwrap the withScriptLock result
+  if (!result.success) {
     return {
       success: false,
       tasksDeleted: 0,
       durationMs: Date.now() - startTime,
-      error: (err && (err.message || err.toString())) || 'Failed to delete old completed tasks'
+      error: result.error
     };
-  } finally {
-    releaseSyncLock();
   }
+
+  return result.result;
 }
 
 /**
@@ -558,16 +605,15 @@ function extractCalendarDate(timestamp) {
  * Mode "daily": Reduces old data (>1 year) to 1 snapshot per calendar day.
  * Mode "hourly": Reduces recent data (<1 year) to 1 snapshot per 60-minute window.
  * @param {string} mode - Either "daily" or "hourly"
- * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, removed: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
+ * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, totalRemoved: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
  */
 function compressSheetData(mode) {
   const startTime = Date.now();
-  const isDaily = mode === 'daily';
-  const logPrefix = isDaily ? '[PRUNE]' : '[DOWNSAMPLE]';
+  
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+    const isDaily = mode === 'daily';
+    const logPrefix = isDaily ? '[PRUNE]' : '[DOWNSAMPLE]';
 
-  acquireSyncLock();
-
-  try {
     const sheet = getOrCreateSheet();
     const lastRow = sheet.getLastRow();
     const totalDataRowsBefore = Math.max(0, lastRow - 1);
@@ -702,20 +748,22 @@ function compressSheetData(mode) {
       durationMs: durationMs,
       message: 'Removed ' + totalRemoved + ' rows. Kept ' + totalDataRowsAfter + '.'
     };
-  } catch (err) {
-    Logger.log(logPrefix + ' Error: ' + err);
+  });
+
+  // Unwrap the withScriptLock result
+  if (!result.success) {
     return {
       success: false,
-      error: (err && (err.message || err.toString())) || 'Unknown error',
+      error: result.error,
       totalBefore: 0,
       totalAfter: 0,
       totalRemoved: 0,
       percentageRemoved: 0,
       durationMs: Date.now() - startTime
     };
-  } finally {
-    releaseSyncLock();
   }
+
+  return result.result;
 }
 
 /**
@@ -741,30 +789,6 @@ function downsampleLastYearToHourly() {
  */
 function getScriptProjectId() {
   return ScriptApp.getScriptId();
-}
-
-/**
- * Lock acquisition to prevent concurrent sync operations (10s cooldown).
- */
-function acquireSyncLock() {
-  const scriptProps = PropertiesService.getScriptProperties();
-  const lastSync = Number(scriptProps.getProperty(LAST_SYNC_PROP_KEY) || 0);
-  const now = Date.now();
-
-  if (lastSync && (now - lastSync) < SYNC_LOCK_COOLDOWN_MS) {
-    const waitSec = Math.ceil((SYNC_LOCK_COOLDOWN_MS - (now - lastSync)) / 1000);
-    throw new Error('A sync or maintenance task is already in progress. Please wait ' + waitSec + 's.');
-  }
-
-  scriptProps.setProperty(LAST_SYNC_PROP_KEY, String(now));
-}
-
-/**
- * Releases or refreshes the sync lock timestamp.
- */
-function releaseSyncLock() {
-  const scriptProps = PropertiesService.getScriptProperties();
-  scriptProps.setProperty(LAST_SYNC_PROP_KEY, String(Date.now()));
 }
 
 /**
