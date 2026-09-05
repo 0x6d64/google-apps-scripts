@@ -6,7 +6,8 @@ const SPREADSHEET_PROP_KEY = 'SPREADSHEET_ID';
 const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
 const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
-const TOP_OVERDUE_ITEMS = 5;
+const TOP_OVERDUE_STORAGE_ITEMS = 15; // Rows retained in Top Overdue sheet
+const TOP_OVERDUE_DISPLAY_ITEMS = 5; // Tasks shown on dashboard
 const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity'];
 const OVERDUE_HOUR = 21;
 const DEFAULT_TIMEZONE = 'Europe/Bucharest';
@@ -347,8 +348,8 @@ function ingestTaskMetricsInternal() {
   ]);
 
   overdueTasksList.sort((a, b) => b.severity - a.severity);
-  const topTen = overdueTasksList.slice(0, 10);
-  updateTopOverdueSheet(topTen);
+  const topOverdue = overdueTasksList.slice(0, TOP_OVERDUE_STORAGE_ITEMS);
+  updateTopOverdueSheet(topOverdue);
 
   return snapshot;
 }
@@ -364,11 +365,11 @@ function ingestTaskMetrics() {
 }
 
 /**
- * Updates the Top Overdue sheet with the top 10 overdue tasks.
- * Clears existing data and writes new top 10 rows.
- * @param {Array<Object>} topTenTasks - Array of top 10 overdue task objects
+ * Stores the top overdue tasks in the Top Overdue sheet.
+ * The sheet retains TOP_OVERDUE_STORAGE_ITEMS tasks for human inspection.
+ * @param {Array<Object>} topOverdueTasks - Array of top overdue task objects
  */
-function updateTopOverdueSheet(topTenTasks) {
+function updateTopOverdueSheet(topOverdueTasks) {
   const sheet = getOrCreateTopOverdueSheet();
   const lastRow = sheet.getLastRow();
 
@@ -377,9 +378,9 @@ function updateTopOverdueSheet(topTenTasks) {
     sheet.deleteRows(2, lastRow - 1);
   }
 
-  // Append new top 10 rows
-  for (let i = 0; i < topTenTasks.length; i++) {
-    const task = topTenTasks[i];
+  // Append new top overdue rows
+  for (let i = 0; i < topOverdueTasks.length; i++) {
+    const task = topOverdueTasks[i];
     sheet.appendRow([
       task.taskId,
       task.taskListId,
@@ -432,23 +433,25 @@ function getDashboardData() {
     validRows.push([isoTimestamp, open, completed, overdue, severity]);
   }
 
-  // Fetch top 3 overdue tasks from the Top Overdue sheet
-  const topOverdueTasksTopX = getTopOverdueTasksTopX();
+  // Fetch top overdue tasks for dashboard display (limited to TOP_OVERDUE_DISPLAY_ITEMS)
+  const topOverdueTasksForDisplay = getTopOverdueTasksForDisplay();
 
   return {
     headers: headers,
     rows: validRows,
     sheetUrl: sheetUrl,
     triggerActive: isTriggerActive(),
-    topOverdueTasksTopX: topOverdueTasksTopX
+    topOverdueTasksTopX: topOverdueTasksForDisplay
   };
 }
 
 /**
- * Fetches the top 3 overdue tasks from the Top Overdue sheet.
- * @return {Array<Object>} Top 3 overdue tasks or empty array if none exist
+ * Returns the top overdue tasks for dashboard display.
+ * Limited to TOP_OVERDUE_DISPLAY_ITEMS tasks (typically 5).
+ * Reads from the Top Overdue sheet, which may contain more tasks for human inspection.
+ * @return {Array<Object>} Top overdue tasks to display or empty array if none exist
  */
-function getTopOverdueTasksTopX() {
+function getTopOverdueTasksForDisplay() {
   try {
     const sheet = getOrCreateTopOverdueSheet();
     const lastRow = sheet.getLastRow();
@@ -457,7 +460,7 @@ function getTopOverdueTasksTopX() {
       return [];
     }
 
-    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_ITEMS, lastRow - 1), 7).getValues();
+    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_DISPLAY_ITEMS, lastRow - 1), 7).getValues();
     const tasks = [];
 
     for (let i = 0; i < rawValues.length; i++) {
