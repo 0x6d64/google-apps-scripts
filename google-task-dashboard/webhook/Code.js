@@ -233,7 +233,7 @@ function ingestTaskMetrics() {
   const now = new Date();
   const sixMonthsCutoff = new Date(now);
   sixMonthsCutoff.setMonth(sixMonthsCutoff.getMonth() + 6);
-
+  
   // Cache timezone and deadline lookups to avoid redundant calls
   const timezone = getTimezone();
   const deadlineCache = {}; // Map of dueDateStr -> overdueDeadline
@@ -578,7 +578,7 @@ function compressSheetData(mode) {
         error: 'Insufficient rows (' + totalDataRowsBefore + ' total). No action taken.',
         totalBefore: totalDataRowsBefore,
         totalAfter: totalDataRowsBefore,
-        removed: 0,
+        totalRemoved: 0,
         percentageRemoved: 0,
         durationMs: Date.now() - startTime
       };
@@ -662,7 +662,7 @@ function compressSheetData(mode) {
         success: true,
         totalBefore: totalDataRowsBefore,
         totalAfter: totalDataRowsBefore,
-        removed: 0,
+        totalRemoved: 0,
         percentageRemoved: 0,
         durationMs: Date.now() - startTime,
         message: 'No cleanup needed.'
@@ -676,7 +676,7 @@ function compressSheetData(mode) {
         error: 'Would remove ' + ((rowsToDelete.length / totalDataRowsBefore) * 100).toFixed(1) + '% of data. Aborting.',
         totalBefore: totalDataRowsBefore,
         totalAfter: totalDataRowsBefore,
-        removed: 0,
+        totalRemoved: 0,
         percentageRemoved: 0,
         durationMs: Date.now() - startTime
       };
@@ -699,7 +699,7 @@ function compressSheetData(mode) {
       success: true,
       totalBefore: totalDataRowsBefore,
       totalAfter: totalDataRowsAfter,
-      removed: totalRemoved,
+      totalRemoved: totalRemoved,
       percentageRemoved: percentageRemoved,
       durationMs: durationMs,
       message: 'Removed ' + totalRemoved + ' rows. Kept ' + totalDataRowsAfter + '.'
@@ -711,7 +711,7 @@ function compressSheetData(mode) {
       error: (err && (err.message || err.toString())) || 'Unknown error',
       totalBefore: 0,
       totalAfter: 0,
-      removed: 0,
+      totalRemoved: 0,
       percentageRemoved: 0,
       durationMs: Date.now() - startTime
     };
