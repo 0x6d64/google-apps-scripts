@@ -114,6 +114,17 @@
         return x - Math.floor(x);
       }
 
+      function cloudRandoms(snapshotTimestamp) {
+        const base = snapshotTimestamp;
+        return {
+          y: pseudoRandom(base + 1.17),
+          size: pseudoRandom(base + 2.31),
+          opacity: pseudoRandom(base + 3.53),
+          shape: pseudoRandom(base + 4.79),
+          bob: pseudoRandom(base + 5.97)
+        };
+      }
+
       function hexToRgb(hex) {
         const v = parseInt(hex.replace('#', ''), 16);
         return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
@@ -311,35 +322,66 @@
         return W - (ageHours / state.activeRangeHours) * effectiveWidth;
       }
 
-      function drawCloud(c, x, y, size, opacity, colorHex, rain, time, seed) {
-        const bobAmp = rain ? 6 : 3;
-        const bobbedY = y + Math.sin(time * 0.5 + seed * 6.28) * bobAmp;
+      function drawCloud(c, x, y, size, opacity, colorHex, rain, time, randoms) {
+        const bobAmp = rain ? 5 : 2.5;
+        const bobbedY = y +
+          Math.sin(time * 0.45 + randoms.bob * 6.28) * bobAmp;
         const rgb = hexToRgb(colorHex);
 
         c.save();
         c.globalAlpha = opacity;
-        const grad = c.createRadialGradient(x, bobbedY, 0, x, bobbedY, size);
+
+        const grad = c.createRadialGradient(
+          x, bobbedY, 0,
+          x, bobbedY, size
+        );
         grad.addColorStop(0, rgbToCss(rgb, 1));
         grad.addColorStop(1, rgbToCss(rgb, 0));
         c.fillStyle = grad;
+
+        const left = 0.42 + randoms.shape * 0.08;
+        const right = 0.45 + randoms.size * 0.10;
+        const crown = 0.46 + randoms.y * 0.10;
+        const shoulder = 0.24 + randoms.shape * 0.08;
+
         c.beginPath();
-        c.arc(x, bobbedY, size * 0.55, 0, Math.PI * 2);
-        c.arc(x - size * 0.5, bobbedY + size * 0.12, size * 0.4, 0, Math.PI * 2);
-        c.arc(x + size * 0.5, bobbedY + size * 0.1, size * 0.42, 0, Math.PI * 2);
-        c.arc(x + size * 0.15, bobbedY - size * 0.22, size * 0.36, 0, Math.PI * 2);
+        c.moveTo(x - size * 0.72, bobbedY + size * 0.12);
+        c.quadraticCurveTo(
+          x - size * 0.52, bobbedY - size * left,
+          x - size * 0.16, bobbedY - size * shoulder
+        );
+        c.quadraticCurveTo(
+          x - size * 0.06, bobbedY - size * crown,
+          x + size * 0.18, bobbedY - size * 0.18
+        );
+        c.quadraticCurveTo(
+          x + size * 0.46, bobbedY - size * right,
+          x + size * 0.70, bobbedY + size * 0.05
+        );
+        c.quadraticCurveTo(
+          x + size * 0.58, bobbedY + size * 0.28,
+          x + size * 0.10, bobbedY + size * 0.30
+        );
+        c.quadraticCurveTo(
+          x - size * 0.42, bobbedY + size * 0.32,
+          x - size * 0.72, bobbedY + size * 0.12
+        );
+        c.closePath();
         c.fill();
 
-        // Only draw rain if cloud is mostly on-screen (avoid off-screen artifacts)
-        if (rain && opacity > 0.3 && x > -100 && x < W + 100) {
-          c.globalAlpha = opacity * 0.35;
+        // Only draw rain if cloud is mostly on-screen (avoid edge artifacts).
+        if (rain && opacity > 0.3 && x > -120 && x < W + 120) {
+          c.globalAlpha = opacity * 0.32;
           c.strokeStyle = rgbToCss(rgb, 1);
-          c.lineWidth = 1.4;
+          c.lineWidth = 1.2;
+          const rainSpan = size * 0.72;
           for (let k = 0; k < 4; k++) {
-            const rx = x - size * 0.4 + k * (size * 0.28);
-            const ry = bobbedY + size * 0.35;
+            const rx = x - rainSpan / 2 +
+              k * (rainSpan / 3);
+            const ry = bobbedY + size * 0.30;
             c.beginPath();
             c.moveTo(rx, ry);
-            c.lineTo(rx - 5, ry + 16);
+            c.lineTo(rx - 4, ry + 14);
             c.stroke();
           }
         }
@@ -392,14 +434,12 @@
           for (let i = 0; i < rows.length; i++) {
             const snapshotTime = new Date(rows[i][0]).getTime();
             const x = getCloudPosition(snapshotTime, now);
-            if (x > -160 && x < W + 160) {
-              // Derive the seed from the snapshot itself rather than its row
-              // index. This keeps cloud properties stable when data changes
-              // and removes the linear X/Y correlation of the old hash.
-              const seed = pseudoRandom(snapshotTime);
-              const y = H * (0.08 + seed * 0.34);
-              const size = weather.sizeMid * (0.75 + seed * 0.5);
-              const opacity = weather.opacityMid * (0.7 + seed * 0.4);
+            if (x > -180 && x < W + 180) {
+              const randoms = cloudRandoms(snapshotTime);
+              const y = H * (0.09 + randoms.y * 0.30);
+              const size = weather.sizeMid * (0.82 + randoms.size * 0.30);
+              const opacity = weather.opacityMid *
+                (0.78 + randoms.opacity * 0.24);
               drawCloud(
                 ctx,
                 x,
@@ -409,7 +449,7 @@
                 weather.color,
                 weather.rain,
                 time,
-                seed
+                randoms
               );
             }
           }
