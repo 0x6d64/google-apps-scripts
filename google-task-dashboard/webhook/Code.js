@@ -6,7 +6,7 @@ const SPREADSHEET_PROP_KEY = 'SPREADSHEET_ID';
 const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
 const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
-const TOP_OVERDUE_STORAGE_ITEMS = 15; // Rows retained in Top Overdue sheet
+const TOP_OVERDUE_STORAGE_ITEMS = 10; // Rows retained in Top Overdue sheet
 const TOP_OVERDUE_DISPLAY_ITEMS = 5; // Tasks shown on dashboard
 const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity'];
 const OVERDUE_HOUR = 21;
@@ -373,23 +373,23 @@ function updateTopOverdueSheet(topOverdueTasks) {
   const sheet = getOrCreateTopOverdueSheet();
   const lastRow = sheet.getLastRow();
 
-  // Delete all data rows (keep header at row 1)
   if (lastRow > 1) {
     sheet.deleteRows(2, lastRow - 1);
   }
 
-  // Append new top overdue rows
-  for (let i = 0; i < topOverdueTasks.length; i++) {
-    const task = topOverdueTasks[i];
-    sheet.appendRow([
-      task.taskId,
-      task.taskListId,
-      task.taskListName,
-      task.title,
-      task.dueDate,
-      Number(task.overdueDuration.toFixed(2)),
-      task.severity
-    ]);
+  // Batch build rows instead of loop append
+  const rows = topOverdueTasks.map(task => [
+    task.taskId,
+    task.taskListId,
+    task.taskListName,
+    task.title,
+    task.dueDate,
+    Number(task.overdueDuration.toFixed(2)),
+    task.severity
+  ]);
+
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, 7).setValues(rows);
   }
 }
 
@@ -405,7 +405,8 @@ function getDashboardData() {
   const lastCol = sheet.getLastColumn();
 
   if (lastRow <= 1) {
-    ingestTaskMetrics();
+    // Auto-init: call internal version directly (no locking needed since this is a single execution)
+    ingestTaskMetricsInternal();
     return getDashboardData();
   }
 
@@ -490,10 +491,20 @@ function getTopOverdueTasksForDisplay() {
  * @return {Object} Refreshed dashboard data or error.
  */
 function syncNow() {
-  return withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
     ingestTaskMetricsInternal();
     return getDashboardData();
   });
+
+  // Unwrap the lock result
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error
+    };
+  }
+
+  return result.result;
 }
 
 /**
@@ -501,7 +512,7 @@ function syncNow() {
  * @return {Object} Refreshed dashboard data or error.
  */
 function syncAndClearTasks() {
-  return withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
     // 1. Ingest metrics first for safe persistence
     ingestTaskMetricsInternal();
 
@@ -519,6 +530,16 @@ function syncAndClearTasks() {
 
     return getDashboardData();
   });
+
+  // Unwrap the lock result
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error
+    };
+  }
+
+  return result.result;
 }
 
 /**
