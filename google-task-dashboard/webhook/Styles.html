@@ -27,6 +27,14 @@
     line-height: 1.5;
   }
 
+  /* Trajectory Weather landscape — fixed background layer behind all dashboard content */
+  #trajectoryWeather {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    display: block;
+  }
+
   .container {
     max-width: 1140px;
     margin: 0 auto;
@@ -219,8 +227,10 @@
 
   /* Controls Toolbar */
   .controls-toolbar {
-    background: var(--surface);
-    border: 1px solid var(--border);
+    background: rgba(240, 248, 255, 0.84);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(200, 220, 230, 0.3);
     border-radius: var(--radius);
     padding: 14px 18px;
     display: flex;
@@ -293,9 +303,11 @@
 
   /* Panel */
   .panel {
-    background: var(--surface);
+    background: rgba(240, 248, 255, 0.84);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     border-radius: var(--radius);
-    border: 1px solid var(--border);
+    border: 1px solid rgba(200, 220, 230, 0.3);
     padding: 24px;
     box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
     margin-bottom: 24px;
@@ -344,7 +356,9 @@
   /* Danger Zone */
   .danger-zone-panel {
     border-color: #fad2cf;
-    background: #fffbfa;
+    background: rgba(255, 251, 250, 0.84);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
   }
 
   .danger-zone-summary {
@@ -670,6 +684,17 @@
     .notification-bubble {
       max-width: 100%;
       width: 100%;
+    }
+  }
+
+  /* Mobile: increase opacity to reduce landscape clutter, keep readability primary */
+  @media (max-width: 640px) {
+    .panel,
+    .controls-toolbar,
+    .danger-zone-panel {
+      background: rgba(240, 248, 255, 0.92);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
     }
   }
 </style>
