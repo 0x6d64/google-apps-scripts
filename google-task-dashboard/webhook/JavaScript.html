@@ -32,6 +32,7 @@
     const VELOCITY_WINDOW_7D = 7;
     const ETA_THRESHOLD_GOOD = 14;
     const ETA_THRESHOLD_CAUTION = 30;
+    const WEEKEND_BAND_COLOR = 'rgba(95, 99, 104, 0.08)';
 
     // Trajectory Weather landscape constants
     const LANDSCAPE_BASELINE_WINDOW_DAYS = 14;
@@ -1157,6 +1158,78 @@
     }
 
     /**
+     * Computes weekend date ranges (Saturday 00:00 to Monday 00:00, local time)
+     * overlapping the given [minDate, maxDate] window. Clamps ranges to the window.
+     * @param {Date} minDate
+     * @param {Date} maxDate
+     * @return {Array<{start: Date, end: Date}>}
+     */
+    function getWeekendRanges(minDate, maxDate) {
+      const ranges = [];
+      const cursor = new Date(minDate);
+      cursor.setHours(0, 0, 0, 0);
+
+      while (cursor <= maxDate) {
+        if (cursor.getDay() === 6) { // Saturday: weekend starts
+          const weekendStart = new Date(cursor);
+          const weekendEnd = new Date(cursor);
+          weekendEnd.setDate(weekendEnd.getDate() + 2); // Monday 00:00
+
+          ranges.push({
+            start: weekendStart < minDate ? minDate : weekendStart,
+            end: weekendEnd > maxDate ? maxDate : weekendEnd
+          });
+          cursor.setDate(cursor.getDate() + 2);
+        } else {
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      }
+
+      return ranges;
+    }
+
+    /**
+     * Overlays translucent vertical bands over weekend date ranges on the chart.
+     * Must be called after the chart's 'ready' event, since it relies on
+     * getChartLayoutInterface() for pixel positioning.
+     * @param {google.visualization.ComboChart} chart
+     * @param {google.visualization.DataTable} dataTable
+     * @param {HTMLElement} container
+     */
+    function renderWeekendBands(chart, dataTable, container) {
+      const numRows = dataTable.getNumberOfRows();
+      if (numRows === 0) return;
+
+      const minDate = dataTable.getValue(0, 0);
+      const maxDate = dataTable.getValue(numRows - 1, 0);
+      if (!(minDate instanceof Date) || !(maxDate instanceof Date)) return;
+
+      const layout = chart.getChartLayoutInterface();
+      const chartArea = layout.getChartAreaBoundingBox();
+      const weekends = getWeekendRanges(minDate, maxDate);
+
+      weekends.forEach((range) => {
+        const x1 = layout.getXLocation(range.start);
+        const x2 = layout.getXLocation(range.end);
+        const left = Math.min(x1, x2);
+        const width = Math.abs(x2 - x1);
+        if (width <= 0) return;
+
+        const band = document.createElement('div');
+        band.className = 'weekend-band';
+        band.style.position = 'absolute';
+        band.style.left = left + 'px';
+        band.style.top = chartArea.top + 'px';
+        band.style.width = width + 'px';
+        band.style.height = chartArea.height + 'px';
+        band.style.background = WEEKEND_BAND_COLOR;
+        band.style.pointerEvents = 'none';
+        band.style.zIndex = '1';
+        container.appendChild(band);
+      });
+    }
+
+    /**
      * Builds and draws the Stacked Line/Area Chart with Overdue Severity Line Overlay.
      */
     function drawStackedLineComboChart() {
@@ -1384,6 +1457,11 @@
       if (!mainChartInstance) {
         mainChartInstance = new google.visualization.ComboChart(chartContainer);
       }
+
+      google.visualization.events.addListener(mainChartInstance, 'ready', () => {
+        renderWeekendBands(mainChartInstance, dataTable, chartContainer);
+      });
+
       mainChartInstance.draw(dataView, options);
     }
 
