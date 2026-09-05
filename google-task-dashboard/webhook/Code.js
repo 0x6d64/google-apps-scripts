@@ -631,25 +631,23 @@ function compressSheetData(mode) {
         }
       }
     } else {
-      // Hourly mode: recent data (<1 year), keep 1 per 60-minute window
+      // Hourly mode: recent data (<1 year), keep 1 per fixed 60-minute bucket (latest wins)
       if (candidateRows && candidateRows.length > 0) {
         const ONE_HOUR_MS = 60 * 60 * 1000;
-        let windowAnchorMs = null;
-        let lastKeptRowNumber = null;
+        const seenBuckets = {}; // bucket -> currently kept rowNumber (latest so far)
+
         for (let i = 0; i < candidateRows.length; i++) {
           const current = candidateRows[i];
-          if (windowAnchorMs === null) {
-            windowAnchorMs = current.timestampMs;
-            lastKeptRowNumber = current.rowNumber;
-            continue;
-          }
-          if (current.timestampMs - windowAnchorMs < ONE_HOUR_MS) {
-            rowsToDelete.push(lastKeptRowNumber);
-            lastKeptRowNumber = current.rowNumber;
-            windowAnchorMs = current.timestampMs;
+          const bucket = Math.floor(current.timestampMs / ONE_HOUR_MS);
+
+          if (Object.prototype.hasOwnProperty.call(seenBuckets, bucket)) {
+            // A row is already kept for this bucket; since candidateRows is sorted
+            // ascending, the current row is newer — replace the kept row and mark
+            // the stale one for deletion.
+            rowsToDelete.push(seenBuckets[bucket]);
+            seenBuckets[bucket] = current.rowNumber;
           } else {
-            lastKeptRowNumber = current.rowNumber;
-            windowAnchorMs = current.timestampMs;
+            seenBuckets[bucket] = current.rowNumber;
           }
         }
       }
