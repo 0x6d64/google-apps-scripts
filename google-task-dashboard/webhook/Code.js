@@ -144,6 +144,63 @@ function getTimezone() {
 }
 
 /**
+ * Iterates over all tasks across all lists with pagination support.
+ * Calls callback(task, listId, listTitle) for each task.
+ * Handles rate limits and malformed responses gracefully.
+ * @param {Function} callback - Called with (task, listId, listTitle) for each task
+ * @return {boolean} - true if completed successfully, false if encountered errors
+ */
+function forEachTaskInAllLists(callback) {
+  let taskListsResult;
+  try {
+    taskListsResult = Tasks.Tasklists.list();
+  } catch (err) {
+    Logger.log('Failed to fetch task lists: ' + err);
+    return false;
+  }
+
+  const taskLists = (taskListsResult && taskListsResult.items) ? taskListsResult.items : [];
+  let hadErrors = false;
+
+  for (let i = 0; i < taskLists.length; i++) {
+    const listId = taskLists[i].id;
+    const listTitle = taskLists[i].title || 'Untitled';
+    let pageToken = null;
+
+    do {
+      let response;
+      try {
+        response = Tasks.Tasks.list(listId, {
+          showCompleted: true,
+          showHidden: true,
+          maxResults: PAGE_FETCH_LIMIT,
+          pageToken: pageToken
+        });
+      } catch (err) {
+        Logger.log('Error fetching tasks for list ' + listId + ': ' + err);
+        hadErrors = true;
+        break;
+      }
+
+      if (!response || !response.items || !Array.isArray(response.items)) {
+        break;
+      }
+
+      const tasks = response.items;
+      for (let j = 0; j < tasks.length; j++) {
+        const task = tasks[j];
+        if (!task) continue;
+        callback(task, listId, listTitle);
+      }
+
+      pageToken = response.nextPageToken;
+    } while (pageToken);
+  }
+
+  return !hadErrors;
+}
+
+/**
  * Calculates the UTC time corresponding to overdueHour:00:00 on a given calendar date
  * in the specified timezone.
  * @param {string} dueDateStr - Calendar date in YYYY-MM-DD format (from Tasks API)
@@ -177,99 +234,58 @@ function ingestTaskMetrics() {
   const sixMonthsCutoff = new Date(now);
   sixMonthsCutoff.setMonth(sixMonthsCutoff.getMonth() + 6);
 
-  let taskListsResult;
-  try {
-    taskListsResult = Tasks.Tasklists.list();
-  } catch (err) {
-    throw new Error('Failed to fetch task lists from Tasks API: ' + (err.message || err));
-  }
-
-  const taskLists = (taskListsResult && taskListsResult.items) ? taskListsResult.items : [];
+  // Cache timezone and deadline lookups to avoid redundant calls
+  const timezone = getTimezone();
+  const deadlineCache = {}; // Map of dueDateStr -> overdueDeadline
 
   let totalOpen = 0;
   let totalCompleted = 0;
   let totalOverdue = 0;
   let totalOverdueSeverity = 0.0;
-  const overdueTasksList = []; // Collect all open overdue tasks
+  const overdueTasksList = [];
 
-  for (let i = 0; i < taskLists.length; i++) {
-    const listId = taskLists[i].id;
-    let pageToken = null;
+  forEachTaskInAllLists((task, listId, listTitle) => {
+    const weight = getTaskWeight(task.title);
 
-    do {
-      let response;
-      try {
-        response = Tasks.Tasks.list(listId, {
-          showCompleted: true,
-          showHidden: true,
-          maxResults: PAGE_FETCH_LIMIT,
-          pageToken: pageToken
-        });
-      } catch (err) {
-        Logger.log('Error fetching tasks for list ' + listId + ': ' + err);
-        break;
-      }
+    if (task.status === 'completed') {
+      totalCompleted += weight;
+    } else if (task.status === 'needsAction') {
+      if (!task.due) {
+        totalOpen += weight;
+      } else {
+        const dueDateStr = task.due;
+        const dueDateObj = new Date(dueDateStr);
 
-      if (!response || !response.items || !Array.isArray(response.items)) {
-        break;
-      }
+        if (!isNaN(dueDateObj.getTime()) && dueDateObj <= sixMonthsCutoff) {
+          totalOpen += weight;
 
-      const tasks = response.items;
-      for (let j = 0; j < tasks.length; j++) {
-        const task = tasks[j];
-        if (!task) continue;
+          // Memoize deadline calculation by due date
+          if (!deadlineCache[dueDateStr]) {
+            deadlineCache[dueDateStr] = getOverdueDeadline(dueDateStr, timezone, OVERDUE_HOUR);
+          }
+          const overdueDeadline = deadlineCache[dueDateStr];
 
-        const weight = getTaskWeight(task.title);
+          if (now >= overdueDeadline) {
+            totalOverdue += weight;
+            const diffMs = now.getTime() - overdueDeadline.getTime();
+            const daysOverdue = diffMs / (1000 * 60 * 60 * 24);
+            const severity = weight * Math.sqrt(daysOverdue);
+            totalOverdueSeverity += severity;
 
-        if (task.status === 'completed') {
-          totalCompleted += weight;
-        } else if (task.status === 'needsAction') {
-          // Include open tasks without due date, or with due date within 6-month window
-          if (!task.due) {
-            // No due date: always count as open
-            totalOpen += weight;
-          } else {
-            // task.due is calendar date in YYYY-MM-DD format
-            const dueDateStr = task.due;
-            const dueDateObj = new Date(dueDateStr);
-
-            if (!isNaN(dueDateObj.getTime())) {
-              // Exclude tasks due more than 6 months in the future (calendar date comparison)
-              if (dueDateObj <= sixMonthsCutoff) {
-                totalOpen += weight;
-
-                // Calculate overdue based on calendar date and OVERDUE_HOUR deadline in configured timezone
-                const timezone = getTimezone();
-                const overdueDeadline = getOverdueDeadline(dueDateStr, timezone, OVERDUE_HOUR);
-
-                if (now >= overdueDeadline) {
-                  // Task is overdue
-                  totalOverdue += weight;
-                  const diffMs = now.getTime() - overdueDeadline.getTime();
-                  const daysOverdue = diffMs / (1000 * 60 * 60 * 24);
-                  const severity = weight * Math.sqrt(daysOverdue);
-                  totalOverdueSeverity += severity;
-
-                  // Collect overdue task for top 10 ranking
-                  overdueTasksList.push({
-                    taskId: task.id,
-                    taskListId: listId,
-                    taskListName: taskLists[i].title || 'Untitled',
-                    title: task.title || '',
-                    dueDate: dueDateStr,
-                    overdueDuration: daysOverdue,
-                    severity: Number(severity.toFixed(2))
-                  });
-                }
-              }
-            }
+            overdueTasksList.push({
+              taskId: task.id,
+              taskListId: listId,
+              taskListName: listTitle,
+              title: task.title || '',
+              dueDate: dueDateStr,
+              overdueDuration: daysOverdue,
+              severity: Number(severity.toFixed(2))
+            });
           }
         }
       }
-
-      pageToken = response.nextPageToken;
-    } while (pageToken);
-  }
+    }
+  });
 
   const snapshot = {
     timestamp: now.toISOString(),
@@ -288,7 +304,6 @@ function ingestTaskMetrics() {
     snapshot.overdue_severity
   ]);
 
-  // Update Top Overdue sheet with top 10 tasks sorted by severity descending
   overdueTasksList.sort((a, b) => b.severity - a.severity);
   const topTen = overdueTasksList.slice(0, 10);
   updateTopOverdueSheet(topTen);
@@ -472,66 +487,33 @@ function deleteOldCompletedTasks(cutoffWeeks) {
   acquireSyncLock();
   try {
     let totalDeleted = 0;
-    const taskListsResult = Tasks.Tasklists.list();
-    const taskLists = (taskListsResult && taskListsResult.items) ? taskListsResult.items : [];
 
-    for (let i = 0; i < taskLists.length; i++) {
-      const listId = taskLists[i].id;
-      let pageToken = null;
+    forEachTaskInAllLists((task, listId, listTitle) => {
+      if (task.status !== 'completed') return;
 
-      do {
-        let response;
+      let isOld = false;
+      if (task.completed) {
+        const completedDate = new Date(task.completed);
+        if (!isNaN(completedDate.getTime()) && completedDate < cutoffDate) {
+          isOld = true;
+        }
+      } else if (task.updated) {
+        const updatedDate = new Date(task.updated);
+        if (!isNaN(updatedDate.getTime()) && updatedDate < cutoffDate) {
+          isOld = true;
+        }
+      }
+
+      if (isOld) {
         try {
-          response = Tasks.Tasks.list(listId, {
-            showCompleted: true,
-            showHidden: true,
-            maxResults: PAGE_FETCH_LIMIT,
-            pageToken: pageToken
-          });
-        } catch (err) {
-          Logger.log('Error fetching tasks for deletion in list ' + listId + ': ' + err);
-          break;
+          Tasks.Tasks.remove(listId, task.id);
+          totalDeleted++;
+        } catch (delErr) {
+          Logger.log('Failed to delete task ' + task.id + ': ' + delErr);
         }
+      }
+    });
 
-        if (!response || !response.items || !Array.isArray(response.items)) {
-          break;
-        }
-
-        const tasks = response.items;
-        for (let j = 0; j < tasks.length; j++) {
-          const task = tasks[j];
-          if (!task || task.status !== 'completed') continue;
-
-          // Check completion timestamp
-          let isOld = false;
-          if (task.completed) {
-            const completedDate = new Date(task.completed);
-            if (!isNaN(completedDate.getTime()) && completedDate < cutoffDate) {
-              isOld = true;
-            }
-          } else if (task.updated) {
-            // Fallback to updated timestamp if completed date is missing
-            const updatedDate = new Date(task.updated);
-            if (!isNaN(updatedDate.getTime()) && updatedDate < cutoffDate) {
-              isOld = true;
-            }
-          }
-
-          if (isOld) {
-            try {
-              Tasks.Tasks.remove(listId, task.id);
-              totalDeleted++;
-            } catch (delErr) {
-              Logger.log('Failed to delete task ' + task.id + ': ' + delErr);
-            }
-          }
-        }
-
-        pageToken = response.nextPageToken;
-      } while (pageToken);
-    }
-
-    // Append fresh metrics snapshot after cleanup
     ingestTaskMetrics();
     const dashboardData = getDashboardData();
     const durationMs = Date.now() - startTime;
@@ -572,11 +554,17 @@ function extractCalendarDate(timestamp) {
 }
 
 /**
- * Reduces all rows older than 1 year (365 days) to 1 snapshot per calendar day.
- * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, totalPruned: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
+ * Unified compression function for sheet data cleanup.
+ * Mode "daily": Reduces old data (>1 year) to 1 snapshot per calendar day.
+ * Mode "hourly": Reduces recent data (<1 year) to 1 snapshot per 60-minute window.
+ * @param {string} mode - Either "daily" or "hourly"
+ * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, removed: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
  */
-function pruneDataOlderThan1Year() {
+function compressSheetData(mode) {
   const startTime = Date.now();
+  const isDaily = mode === 'daily';
+  const logPrefix = isDaily ? '[PRUNE]' : '[DOWNSAMPLE]';
+
   acquireSyncLock();
 
   try {
@@ -587,239 +575,114 @@ function pruneDataOlderThan1Year() {
     if (totalDataRowsBefore < 10) {
       return {
         success: false,
-        error: 'Insufficient rows to prune (only ' + totalDataRowsBefore + ' total). No action taken.',
+        error: 'Insufficient rows (' + totalDataRowsBefore + ' total). No action taken.',
         totalBefore: totalDataRowsBefore,
         totalAfter: totalDataRowsBefore,
-        totalPruned: 0,
+        removed: 0,
         percentageRemoved: 0,
         durationMs: Date.now() - startTime
       };
     }
 
-    const cutoffTimestamp = Date.now() - (365 * 24 * 60 * 60 * 1000);
+    const now = Date.now();
+    const oneYearMs = 365 * 24 * 60 * 60 * 1000;
+    const cutoffTimestamp = now - oneYearMs;
     const rangeValues = sheet.getRange(2, 1, totalDataRowsBefore, 1).getValues();
 
-    const seenDateKeys = {};
     const rowsToDelete = [];
+    const seenBuckets = {}; // Map of bucketKey -> rowNumber (last seen in bucket)
 
-    for (let i = 0; i < rangeValues.length; i++) {
-      const rawDate = rangeValues[i][0];
-      if (!rawDate) continue;
-
-      const dateObj = new Date(rawDate);
-      if (isNaN(dateObj.getTime())) continue;
-
-      const rowNumber = i + 2; // 1-based indexing + header offset
-
-      if (dateObj.getTime() >= cutoffTimestamp) {
-        // Recent data (< 1 year old); keep all intervals
-        continue;
+    // For hourly: collect rows with their timestamps
+    let candidateRows = null;
+    if (!isDaily) {
+      candidateRows = [];
+      for (let i = 0; i < rangeValues.length; i++) {
+        const rawDate = rangeValues[i][0];
+        if (!rawDate) continue;
+        const dateObj = new Date(rawDate);
+        if (isNaN(dateObj.getTime())) continue;
+        const rowNumber = i + 2;
+        const timestampMs = dateObj.getTime();
+        if (timestampMs >= cutoffTimestamp) {
+          candidateRows.push({ rowNumber: rowNumber, timestampMs: timestampMs });
+        }
       }
-
-      // Old data (> 1 year old); keep only 1 snapshot per calendar day
-      const dateKey = extractCalendarDate(dateObj);
-      if (!dateKey) continue;
-
-      if (seenDateKeys[dateKey]) {
-        // Duplicate row for this old date; mark for deletion
-        rowsToDelete.push(rowNumber);
-      } else {
-        seenDateKeys[dateKey] = rowNumber;
+      if (candidateRows.length > 0) {
+        candidateRows.sort((a, b) => a.timestampMs - b.timestampMs);
       }
     }
 
-    Logger.log('[PRUNE] Total rows before: ' + totalDataRowsBefore + ', Marked for deletion: ' + rowsToDelete.length);
+    // Identify rows to delete
+    if (isDaily) {
+      // Daily mode: old data (>1 year), keep 1 per calendar day
+      for (let i = 0; i < rangeValues.length; i++) {
+        const rawDate = rangeValues[i][0];
+        if (!rawDate) continue;
+        const dateObj = new Date(rawDate);
+        if (isNaN(dateObj.getTime())) continue;
+        const rowNumber = i + 2;
+        if (dateObj.getTime() >= cutoffTimestamp) continue; // Skip recent data
+        const dateKey = extractCalendarDate(dateObj);
+        if (!dateKey) continue;
+        if (seenBuckets[dateKey]) {
+          rowsToDelete.push(rowNumber);
+        } else {
+          seenBuckets[dateKey] = rowNumber;
+        }
+      }
+    } else {
+      // Hourly mode: recent data (<1 year), keep 1 per 60-minute window
+      if (candidateRows && candidateRows.length > 0) {
+        const ONE_HOUR_MS = 60 * 60 * 1000;
+        let windowAnchorMs = null;
+        let lastKeptRowNumber = null;
+        for (let i = 0; i < candidateRows.length; i++) {
+          const current = candidateRows[i];
+          if (windowAnchorMs === null) {
+            windowAnchorMs = current.timestampMs;
+            lastKeptRowNumber = current.rowNumber;
+            continue;
+          }
+          if (current.timestampMs - windowAnchorMs < ONE_HOUR_MS) {
+            rowsToDelete.push(lastKeptRowNumber);
+            lastKeptRowNumber = current.rowNumber;
+            windowAnchorMs = current.timestampMs;
+          } else {
+            lastKeptRowNumber = current.rowNumber;
+            windowAnchorMs = current.timestampMs;
+          }
+        }
+      }
+    }
+
+    Logger.log(logPrefix + ' Total rows before: ' + totalDataRowsBefore + ', Marked for deletion: ' + rowsToDelete.length);
 
     if (rowsToDelete.length === 0) {
       return {
         success: true,
         totalBefore: totalDataRowsBefore,
         totalAfter: totalDataRowsBefore,
-        totalPruned: 0,
+        removed: 0,
         percentageRemoved: 0,
         durationMs: Date.now() - startTime,
-        message: 'All data is either less than 1 year old or already daily deduplicated. No pruning needed.'
+        message: 'No cleanup needed.'
       };
     }
 
-    // Safety threshold: abort if more than 80% of total rows would be pruned
+    // Safety threshold: abort if >80% would be removed
     if ((rowsToDelete.length / totalDataRowsBefore) > 0.80) {
       return {
         success: false,
-        error: 'Pruning would remove ' + ((rowsToDelete.length / totalDataRowsBefore) * 100).toFixed(1) + '% of data. Aborting as safety measure. Check data integrity.',
+        error: 'Would remove ' + ((rowsToDelete.length / totalDataRowsBefore) * 100).toFixed(1) + '% of data. Aborting.',
         totalBefore: totalDataRowsBefore,
         totalAfter: totalDataRowsBefore,
-        totalPruned: 0,
+        removed: 0,
         percentageRemoved: 0,
         durationMs: Date.now() - startTime
       };
     }
 
-    // Batch delete rows in reverse order from bottom to top to avoid index shifting
-    for (let i = rowsToDelete.length - 1; i >= 0; i--) {
-      sheet.deleteRow(rowsToDelete[i]);
-    }
-
-    const totalDataRowsAfter = Math.max(0, sheet.getLastRow() - 1);
-    const totalPruned = totalDataRowsBefore - totalDataRowsAfter;
-    const percentageRemoved = totalDataRowsBefore > 0 ? Number(((totalPruned / totalDataRowsBefore) * 100).toFixed(1)) : 0;
-    const durationMs = Date.now() - startTime;
-
-    Logger.log('[PRUNE] Finished in ' + durationMs + 'ms. Rows remaining: ' + totalDataRowsAfter);
-
-    return {
-      success: true,
-      totalBefore: totalDataRowsBefore,
-      totalAfter: totalDataRowsAfter,
-      totalPruned: totalPruned,
-      percentageRemoved: percentageRemoved,
-      durationMs: durationMs,
-      message: 'Pruned ' + totalPruned + ' rows. Kept ' + totalDataRowsAfter + '.'
-    };
-  } catch (err) {
-    Logger.log('[PRUNE] Error: ' + err);
-    return {
-      success: false,
-      error: (err && (err.message || err.toString())) || 'Unknown pruning error',
-      totalBefore: 0,
-      totalAfter: 0,
-      totalPruned: 0,
-      percentageRemoved: 0,
-      durationMs: Date.now() - startTime
-    };
-  } finally {
-    releaseSyncLock();
-  }
-}
-
-/**
- * Returns the script project ID for admin access link.
- */
-function getScriptProjectId() {
-  return ScriptApp.getScriptId();
-}
-
-/**
- * Downsamples the last 365 days of snapshot rows to at most 1 entry per
- * rolling 60-minute window, keeping only the latest snapshot in each window.
- * Rows older than 365 days are left untouched (handled separately by
- * pruneDataOlderThan1Year).
- */
-function downsampleLastYearToHourly() {
-  const startTime = Date.now();
-  acquireSyncLock();
-
-  try {
-    const sheet = getOrCreateSheet();
-    const lastRow = sheet.getLastRow();
-    const totalDataRowsBefore = Math.max(0, lastRow - 1);
-
-    if (totalDataRowsBefore < 10) {
-      return {
-        success: false,
-        error: 'Insufficient rows to downsample (only ' + totalDataRowsBefore + ' total). No action taken.',
-        totalBefore: totalDataRowsBefore,
-        totalAfter: totalDataRowsBefore,
-        totalRemoved: 0,
-        percentageRemoved: 0,
-        durationMs: Date.now() - startTime
-      };
-    }
-
-    const cutoffTimestamp = Date.now() - (365 * 24 * 60 * 60 * 1000);
-    const rangeValues = sheet.getRange(2, 1, totalDataRowsBefore, 1).getValues();
-
-    // Build list of {rowNumber, timestampMs} for rows within the last 365 days
-    const candidateRows = [];
-    for (let i = 0; i < rangeValues.length; i++) {
-      const rawDate = rangeValues[i][0];
-      if (!rawDate) continue;
-
-      const dateObj = new Date(rawDate);
-      if (isNaN(dateObj.getTime())) continue;
-
-      const rowNumber = i + 2; // 1-based indexing + header offset
-      const timestampMs = dateObj.getTime();
-
-      if (timestampMs < cutoffTimestamp) {
-        // Older than 1 year; not in scope for this action
-        continue;
-      }
-
-      candidateRows.push({ rowNumber: rowNumber, timestampMs: timestampMs });
-    }
-
-    if (candidateRows.length === 0) {
-      return {
-        success: true,
-        totalBefore: totalDataRowsBefore,
-        totalAfter: totalDataRowsBefore,
-        totalRemoved: 0,
-        percentageRemoved: 0,
-        durationMs: Date.now() - startTime,
-        message: 'No snapshots found within the last 365 days. No action taken.'
-      };
-    }
-
-    // Sort ascending by timestamp (sheet rows should already be in order, but be defensive)
-    candidateRows.sort((a, b) => a.timestampMs - b.timestampMs);
-
-    const ONE_HOUR_MS = 60 * 60 * 1000;
-    const rowsToDelete = [];
-    let windowAnchorMs = null; // end-timestamp of the currently open 60-minute window
-    let lastKeptRowNumber = null;
-
-    for (let i = 0; i < candidateRows.length; i++) {
-      const current = candidateRows[i];
-
-      if (windowAnchorMs === null) {
-        // First row in scope: starts a new window
-        windowAnchorMs = current.timestampMs;
-        lastKeptRowNumber = current.rowNumber;
-        continue;
-      }
-
-      if (current.timestampMs - windowAnchorMs < ONE_HOUR_MS) {
-        // Falls within the rolling 60-minute window of the last kept snapshot;
-        // this snapshot is newer, so it replaces the previously kept one.
-        rowsToDelete.push(lastKeptRowNumber);
-        lastKeptRowNumber = current.rowNumber;
-        windowAnchorMs = current.timestampMs;
-      } else {
-        // Outside the window; keep this row and start a new window from it.
-        lastKeptRowNumber = current.rowNumber;
-        windowAnchorMs = current.timestampMs;
-      }
-    }
-
-    Logger.log('[DOWNSAMPLE] Candidate rows: ' + candidateRows.length + ', Marked for deletion: ' + rowsToDelete.length);
-
-    if (rowsToDelete.length === 0) {
-      return {
-        success: true,
-        totalBefore: totalDataRowsBefore,
-        totalAfter: totalDataRowsBefore,
-        totalRemoved: 0,
-        percentageRemoved: 0,
-        durationMs: Date.now() - startTime,
-        message: 'Last year of data is already at or below 1 entry per hour. No action taken.'
-      };
-    }
-
-    // Safety threshold: abort if more than 80% of total rows would be removed
-    if ((rowsToDelete.length / totalDataRowsBefore) > 0.80) {
-      return {
-        success: false,
-        error: 'Downsampling would remove ' + ((rowsToDelete.length / totalDataRowsBefore) * 100).toFixed(1) + '% of data. Aborting as safety measure. Check data integrity.',
-        totalBefore: totalDataRowsBefore,
-        totalAfter: totalDataRowsBefore,
-        totalRemoved: 0,
-        percentageRemoved: 0,
-        durationMs: Date.now() - startTime
-      };
-    }
-
-    // Batch delete rows in reverse order from bottom to top to avoid index shifting
+    // Batch delete rows in reverse order to avoid index shifting
     rowsToDelete.sort((a, b) => b - a);
     for (let i = 0; i < rowsToDelete.length; i++) {
       sheet.deleteRow(rowsToDelete[i]);
@@ -830,31 +693,49 @@ function downsampleLastYearToHourly() {
     const percentageRemoved = totalDataRowsBefore > 0 ? Number(((totalRemoved / totalDataRowsBefore) * 100).toFixed(1)) : 0;
     const durationMs = Date.now() - startTime;
 
-    Logger.log('[DOWNSAMPLE] Finished in ' + durationMs + 'ms. Rows remaining: ' + totalDataRowsAfter);
+    Logger.log(logPrefix + ' Finished in ' + durationMs + 'ms. Rows remaining: ' + totalDataRowsAfter);
 
     return {
       success: true,
       totalBefore: totalDataRowsBefore,
       totalAfter: totalDataRowsAfter,
-      totalRemoved: totalRemoved,
+      removed: totalRemoved,
       percentageRemoved: percentageRemoved,
       durationMs: durationMs,
-      message: 'Downsampled ' + totalRemoved + ' rows. Kept ' + totalDataRowsAfter + '.'
+      message: 'Removed ' + totalRemoved + ' rows. Kept ' + totalDataRowsAfter + '.'
     };
   } catch (err) {
-    Logger.log('[DOWNSAMPLE] Error: ' + err);
+    Logger.log(logPrefix + ' Error: ' + err);
     return {
       success: false,
-      error: (err && (err.message || err.toString())) || 'Unknown downsampling error',
+      error: (err && (err.message || err.toString())) || 'Unknown error',
       totalBefore: 0,
       totalAfter: 0,
-      totalRemoved: 0,
+      removed: 0,
       percentageRemoved: 0,
       durationMs: Date.now() - startTime
     };
   } finally {
     releaseSyncLock();
   }
+}
+
+/**
+ * Reduces all rows older than 1 year (365 days) to 1 snapshot per calendar day.
+ * Public wrapper for compressSheetData('daily').
+ * @return {Object}
+ */
+function pruneDataOlderThan1Year() {
+  return compressSheetData('daily');
+}
+
+/**
+ * Downsamples the last 365 days of snapshot rows to at most 1 entry per 60-minute window.
+ * Public wrapper for compressSheetData('hourly').
+ * @return {Object}
+ */
+function downsampleLastYearToHourly() {
+  return compressSheetData('hourly');
 }
 
 /**
@@ -899,14 +780,14 @@ function isTriggerActive() {
     return propVal === 'true';
   }
 
-  // Fallback to checking project triggers directly
+  // Fallback to checking project triggers directly (property uninitialized)
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'ingestTaskMetrics') {
       return true;
     }
   }
-  return true; // Default is true if unset
+  return false; // No property and no trigger found
 }
 
 /**
