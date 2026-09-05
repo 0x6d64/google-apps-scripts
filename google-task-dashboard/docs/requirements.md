@@ -57,15 +57,35 @@ auth = sufficient security.
   older than cutoff, keep recent ones, re-ingest after
 - `downsampleLastYearToHourly()` — collapse last-365-day rows using the
   configured age-based downsampling policy, latest-wins
-- During `ingestTaskMetrics()`, calculate the three most overdue open tasks
-  and store their task ID, task list ID, task list name, title, due date,
-  overdue duration, and individual severity in script-level `CacheService`.
-- `getDashboardData()` reads the cached Top 3 without making a Tasks API
-  request. Cache uses a 6-hour expiration and missing/expired data is treated
-  as unavailable.
+- During `ingestTaskMetrics()`, calculate the top 10 overdue open tasks
+  and store them in a dedicated "Top Overdue" sheet in the same Google Sheets
+  file. Include task ID, task list ID, task list name, title, due date,
+  overdue duration, and individual severity. Sheet is retained for human
+  inspection and future extensibility.
+- `getDashboardData()` reads the top 5 overdue tasks from the Top Overdue
+  sheet (display limit) for dashboard rendering. If no overdue tasks exist,
+  the section is hidden. Sheet may contain up to 10 tasks.
+- Top Overdue sheet updates on every `ingestTaskMetrics()` call; deletes all
+  prior data rows and appends fresh top 10.
 - `pruneDataOlderThan1Year()` — collapse >365-day rows to 1/calendar-day
   (UTC); abort if >80% of rows would be deleted; return stats
   (`totalBefore/After/Pruned/durationMs`)
+
+### Concurrency & locking
+
+- All mutation operations (`ingestTaskMetrics`, `deleteOldCompletedTasks`,
+  `compressSheetData` / prune / downsample, `syncAndClearTasks`) use
+  `LockService.getScriptLock()` for true mutual exclusion across all execution
+  contexts (manual triggers, automated cron, maintenance operations).
+- Lock acquisition uses `tryLock(timeoutMs)` with two timeout tiers:
+  - **Interactive operations** (user-clicked): 5000ms
+  - **Automated triggers** (background cron): 10000ms
+- On lock timeout, interactive operations return `{success: false, error: "..."}`;
+  automated triggers skip silently and retry on the next scheduled cycle (3h).
+- Lock is released in a `finally` block after `SpreadsheetApp.flush()` to
+  ensure all Sheet writes are committed while the lock is still held.
+- Internal logic functions (e.g., `ingestTaskMetricsInternal()`) are unlocked
+  and assume the caller holds the lock, preventing reentrancy issues.
 
 ### Dashboard — KPIs
 
@@ -74,10 +94,10 @@ auth = sufficient security.
 - Velocity: 24h / 3d / 7d completion throughput. Sum positive deltas only
   (ignore drops from purge/delete). Use actual elapsed time between
   snapshots, not fixed interval.
-- Top 3 Overdue section: compact full-width section below the KPI cards;
-  display task title, overdue duration, and individual overdue severity, plus
-  an `Open Google Tasks` action. Hide when no overdue tasks are available in
-  cache.
+- Top Overdue section: displays the top 5 most severe overdue tasks from the
+  Top Overdue sheet (which stores up to 10 for extensibility). Each task shows
+  title, overdue duration, and individual severity, plus an `Open Google Tasks`
+  action. Section is hidden when no overdue tasks are available.
 - Backlog ETA uses a neutral indigo/blue treatment distinct from the red
   Overdue KPI.
 - Backlog ETA card: shown only if `completion_rate > addition_rate` and

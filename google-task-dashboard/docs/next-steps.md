@@ -243,131 +243,64 @@ of the dashboard data request and displays only the Top 3.
 
 ### 10. Replace timestamp debounce with LockService mutex
 
-📋 **Planned**
+✅ **DONE**
 
-**Implementation:** Replace the fake timestamp-based `acquireSyncLock()` cooldown with a real `LockService.getScriptLock()` mutual exclusion lock. Use `tryLock(timeoutMs)` with explicit timeout checks and structured error returns (no exceptions), matching existing `{success, error}` response shape. Split `ingestTaskMetrics()` into an unlocked internal version to avoid reentrancy risk when `deleteOldCompletedTasks()` calls it post-deletion. Apply locking to all mutation entry points: `ingestTaskMetrics()`, `deleteOldCompletedTasks()`, `compressSheetData()` (prune/downsample). Use two timeout tiers: 5s for interactive operations (user-clicked), 10s for automated triggers (auto-sync cron).
-
-**Implementation details:**
-- Create `withScriptLock(timeoutMs, callback)` helper: acquires lock via `tryLock()`, executes callback in try/finally, calls `SpreadsheetApp.flush()` before release, returns structured response on timeout.
-- Split `ingestTaskMetrics()` into:
-  - `ingestTaskMetricsInternal()` — actual logic, assumes caller holds the lock, no locking wrapper.
-  - `ingestTaskMetrics()` — thin public wrapper calling `withScriptLock(TIMEOUT_INTERACTIVE_MS, ingestTaskMetricsInternal)`.
-- Update `deleteOldCompletedTasks()` to call `ingestTaskMetricsInternal()` (not the wrapper) for its post-deletion snapshot refresh.
-- Wrap `deleteOldCompletedTasks()`, `compressSheetData()` bodies with `withScriptLock()`.
-- Define constants: `TIMEOUT_INTERACTIVE_MS = 5000`, `TIMEOUT_TRIGGER_MS = 10000`.
-- Auto-trigger: on lock timeout, log and skip silently (retry next cycle in 3 hours) rather than fail the user-facing call.
-- Remove old debounce code: `acquireSyncLock()`, `releaseSyncLock()`, `LAST_SYNC_PROP_KEY`, `SYNC_LOCK_COOLDOWN_MS`.
+**Implementation:** Replaced the fake timestamp-based `acquireSyncLock()` cooldown with a real `LockService.getScriptLock()` mutual exclusion lock. Uses `tryLock(timeoutMs)` with explicit timeout checks and structured error returns (no exceptions), matching existing `{success, error}` response shape. Split `ingestTaskMetrics()` into an unlocked internal version to avoid reentrancy risk when `deleteOldCompletedTasks()` calls it post-deletion. Applied locking to all mutation entry points: `ingestTaskMetrics()`, `deleteOldCompletedTasks()`, `compressSheetData()` (prune/downsample). Two timeout tiers: 5s for interactive operations (user-clicked), 10s for automated triggers (auto-sync cron).
 
 **Changes:**
-- [pending implementation]
+- Created `withScriptLock(timeoutMs, callback)` helper: acquires lock via `tryLock()`, executes callback in try/finally, calls `SpreadsheetApp.flush()` before release, returns structured response on timeout.
+- Split `ingestTaskMetrics()` into:
+  - `ingestTaskMetricsInternal()` — unlocked core logic, assumes caller holds the lock
+  - `ingestTaskMetrics()` — thin public wrapper calling `withScriptLock(TIMEOUT_TRIGGER_MS, ingestTaskMetricsInternal)`
+- Updated `deleteOldCompletedTasks()` to call `ingestTaskMetricsInternal()` for post-deletion refresh (avoids reentrancy)
+- Wrapped `deleteOldCompletedTasks()`, `syncNow()`, `syncAndClearTasks()`, `compressSheetData()` bodies with `withScriptLock()`
+- Defined constants: `TIMEOUT_INTERACTIVE_MS = 5000`, `TIMEOUT_TRIGGER_MS = 10000`
+- Auto-trigger: on lock timeout, logs and skips silently (retries next cycle in 3 hours)
+- Removed old debounce code: `acquireSyncLock()`, `releaseSyncLock()`, `LAST_SYNC_PROP_KEY`, `SYNC_LOCK_COOLDOWN_MS`
 
 **Files:** Code.js
 
-**Effort:** M
+**Effort:** M ✓
 
 ---
 
----
+### 11. Explicit top-overdue storage vs display separation
 
-### 11. Rework trajectory weather to reflect backlog trajectory
+✅ **DONE**
 
-📋 **Planned**
-
-**Implementation:** Replace the current weather metric, which primarily compares
-recent completion velocity with a historical completion baseline, with a metric
-based on net backlog change. The weather shall represent whether the backlog is
-shrinking, stable, or growing, so that it remains semantically consistent with
-Backlog ETA.
-
-Use the selected display range for the recent rates and the existing fixed
-14-day baseline for the reference period.
-
-Proposed formulas:
-
-```text
-completionRate = completed / day
-additionRate   = added / day
-netRate        = completionRate - additionRate
-
-baselineNetRate =
-    baselineCompletionRate - baselineAdditionRate
-
-baselineMagnitude =
-    max(abs(baselineNetRate), MIN_BASELINE_RATE)
-
-metric =
-    clamp(
-        0.5 + WEATHER_NET_RATE_SCALE *
-        (netRate / baselineMagnitude),
-        0,
-        1
-    )
-```
-
-Initial parameter:
-
-```text
-WEATHER_NET_RATE_SCALE = 0.5
-```
-
-Interpretation:
-
-- `netRate > 0`: backlog is shrinking → improving weather
-- `netRate ≈ 0`: backlog is stable → neutral weather
-- `netRate < 0`: backlog is growing → worsening weather
-- `0.0`: storm
-- `0.5`: steady
-- `1.0`: clear
-
-If there is insufficient history for a meaningful baseline, use the neutral
-metric `0.5`. Do not use ETA itself as the weather metric; ETA reflects both
-trajectory and current backlog size, while weather should primarily describe
-trajectory direction and strength.
+**Implementation:** Clarified the distinction between how many overdue tasks are retained in the sheet (10, for human inspection and extensibility) versus how many are displayed on the dashboard (5, for UI real estate). Two independent constants with clear semantics prevent future confusion between storage capacity and display limits.
 
 **Changes:**
-- [pending implementation]
+- Replaced ambiguous `const TOP_OVERDUE_ITEMS = 5` with:
+  - `const TOP_OVERDUE_STORAGE_ITEMS = 10` — rows retained in Top Overdue sheet
+  - `const TOP_OVERDUE_DISPLAY_ITEMS = 5` — tasks shown on dashboard
+- Updated `ingestTaskMetricsInternal()` to slice to `TOP_OVERDUE_STORAGE_ITEMS`
+- Renamed `getTopOverdueTasksTopX()` → `getTopOverdueTasksForDisplay()` for clarity
+- Updated `getTopOverdueTasksForDisplay()` to limit display reads to `TOP_OVERDUE_DISPLAY_ITEMS`
+- Updated JSDoc comments to reflect storage vs display responsibilities
+- Call site in `getDashboardData()` updated to use renamed function
 
-**Files:** JavaScript.html
+**Files:** Code.js
 
-**Effort:** M
+**Effort:** S ✓
 
 ---
 
-### 12. Fix cloud rendering artifacts and property correlation
+### 12. Optimize getDashboardData for historic data
 
-📋 **Planned**
+✅ **DONE**
 
-**Implementation:** Refine cloud generation so individual cloud properties are
-deterministic but independently distributed. Keep snapshot-based seeding so
-clouds remain stable when rows are added or removed, but derive separate
-pseudo-random values for vertical position, size, opacity, and shape.
-
-Replace the current four-circle cloud silhouette with a less mechanical,
-asymmetric cloud form using multiple independently positioned lobes. Reduce
-excessive cloud size, especially in storm/heavy states.
-
-Clouds shall enter and leave through a small off-screen margin rather than
-appearing to spawn exactly at the viewport edge.
-
-Weather-state changes shall interpolate cloud visual properties where practical
-instead of abruptly replacing size, opacity, and colour at state thresholds.
-
-Requirements:
-- No cloud property shall be derived from the same random value as another
-  independent property.
-- Cloud appearance shall remain stable for the same snapshot timestamp.
-- Cloud shapes shall vary in width, height, lobe placement, and density.
-- Clouds shall remain visually bounded and avoid oversized edge artifacts.
-- Rain shall remain limited to appropriate weather states and remain visually
-  attached to its cloud.
-- The fix must not alter the underlying snapshot data or chart calculations.
+**Implementation:** Reduced per-row processing overhead in `getDashboardData()` by fixing column range, eliminating redundant number conversions, and caching the trigger check. These changes measurably improve dashboard load times when the sheet contains 500+ historic snapshots.
 
 **Changes:**
-- [pending implementation]
+- Changed `getRange(1, 1, lastRow, Math.max(5, lastCol))` → `getRange(1, 1, lastRow, 5)` — reads exactly 5 columns instead of potentially 10+
+- Simplified severity parsing: store `severityNum = Number(row[4])` once, use directly (removed double-conversion via `toFixed()`)
+- Cached `isTriggerActive()` result into local variable instead of calling inline in return object
+- Clarified comment on auto-init path (calls `ingestTaskMetricsInternal()` directly, no lock needed for single execution)
 
-**Files:** JavaScript.html
+**Files:** Code.js
 
-**Effort:** M
+**Effort:** S ✓
 
 ---
 
