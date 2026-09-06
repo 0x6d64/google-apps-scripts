@@ -672,14 +672,73 @@
     }
 
     /**
+     * Formats a compact description of a value for diagnostics.
+     * @param {*} value
+     * @return {string}
+     */
+    function describeValue(value) {
+      if (value === null) return 'null';
+      if (value === undefined) return 'undefined';
+      if (Array.isArray(value)) return 'Array(' + value.length + ')';
+      return typeof value;
+    }
+
+    /**
      * Handles successful data reception from Apps Script.
      * @param {Object} data - { headers, rows, sheetUrl, triggerActive }
      */
     function onDataLoaded(data) {
-      if (!data || !Array.isArray(data.rows)) {
-        showStatus('Received invalid data format from server.', 'error');
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        const details = [
+          'Expected: object with rows: Array',
+          'Received: ' + describeValue(data)
+        ];
+
+        console.error('Invalid dashboard data received from server.', {
+          data: data,
+          receivedType: describeValue(data)
+        });
+
+        showStatus(
+          'Invalid server response. ' + details.join(' | ') + '.',
+          'error'
+        );
         return;
       }
+
+      if (!Array.isArray(data.rows)) {
+        const keys = Object.keys(data);
+        const rowDetails = data.rows === undefined
+          ? 'missing'
+          : describeValue(data.rows);
+        const fields = keys.length > 0 ? keys.join(', ') : '(none)';
+
+        console.error('Invalid dashboard data received from server.', {
+          data: data,
+          keys: keys,
+          rows: data.rows,
+          rowsType: typeof data.rows,
+          rowsIsArray: Array.isArray(data.rows)
+        });
+
+        showStatus(
+          'Invalid server response. Expected rows: Array; ' +
+          'received rows: ' + rowDetails + '. Fields: ' + fields + '.',
+          'error'
+        );
+        return;
+      }
+
+      console.debug('Dashboard data received successfully.', {
+        keys: Object.keys(data),
+        rowCount: data.rows.length,
+        firstRow: data.rows.length > 0 ? data.rows[0] : null,
+        lastRow: data.rows.length > 0
+          ? data.rows[data.rows.length - 1]
+          : null,
+        sheetUrlPresent: Boolean(data.sheetUrl),
+        triggerActive: data.triggerActive
+      });
 
       rawData = JSON.parse(JSON.stringify(data));
       hideStatus();
