@@ -5,10 +5,10 @@
 const SPREADSHEET_PROP_KEY = 'SPREADSHEET_ID';
 const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
-const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
+const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity', 'subtasks_open', 'subtasks_completed'];
 const TOP_OVERDUE_STORAGE_ITEMS = 20; // Rows retained in Top Overdue sheet
 const TOP_OVERDUE_DISPLAY_ITEMS = 5; // Tasks shown on dashboard
-const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity'];
+const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity', 'parent'];
 const OVERDUE_HOUR = 21;
 const DEFAULT_TIMEZONE = 'Europe/Bucharest';
 const TIMEOUT_INTERACTIVE_MS = 5000; // 5s for user-clicked operations
@@ -285,22 +285,34 @@ function ingestTaskMetricsInternal() {
   let totalCompleted = 0;
   let totalOverdue = 0;
   let totalOverdueSeverity = 0.0;
+  let totalSubtasksOpen = 0;
+  let totalSubtasksCompleted = 0;
   const overdueTasksList = [];
 
   forEachTaskInAllLists((task, listId, listTitle) => {
     const weight = getTaskWeight(task.title);
+    const isSubtask = !!task.parent;
 
     if (task.status === 'completed') {
       totalCompleted += weight;
+      if (isSubtask) {
+        totalSubtasksCompleted += weight;
+      }
     } else if (task.status === 'needsAction') {
       if (!task.due) {
         totalOpen += weight;
+        if (isSubtask) {
+          totalSubtasksOpen += weight;
+        }
       } else {
         const dueDateStr = task.due;
         const dueDateObj = new Date(dueDateStr);
 
         if (!isNaN(dueDateObj.getTime()) && dueDateObj <= sixMonthsCutoff) {
           totalOpen += weight;
+          if (isSubtask) {
+            totalSubtasksOpen += weight;
+          }
 
           // Memoize deadline calculation by due date
           if (!deadlineCache[dueDateStr]) {
@@ -322,7 +334,8 @@ function ingestTaskMetricsInternal() {
               title: task.title || '',
               dueDate: dueDateStr,
               overdueDuration: daysOverdue,
-              severity: Number(severity.toFixed(2))
+              severity: Number(severity.toFixed(2)),
+              parent: task.parent || ''
             });
           }
         }
@@ -335,7 +348,9 @@ function ingestTaskMetricsInternal() {
     open: totalOpen,
     completed: totalCompleted,
     overdue: totalOverdue,
-    overdue_severity: Number(totalOverdueSeverity.toFixed(2))
+    overdue_severity: Number(totalOverdueSeverity.toFixed(2)),
+    subtasks_open: totalSubtasksOpen,
+    subtasks_completed: totalSubtasksCompleted
   };
 
   const sheet = getOrCreateSheet();
@@ -344,7 +359,9 @@ function ingestTaskMetricsInternal() {
     snapshot.open,
     snapshot.completed,
     snapshot.overdue,
-    snapshot.overdue_severity
+    snapshot.overdue_severity,
+    snapshot.subtasks_open,
+    snapshot.subtasks_completed
   ]);
 
   overdueTasksList.sort((a, b) => b.severity - a.severity);
@@ -385,11 +402,12 @@ function updateTopOverdueSheet(topOverdueTasks) {
     task.title,
     task.dueDate,
     Number(task.overdueDuration.toFixed(2)),
-    task.severity
+    task.severity,
+    task.parent || ''
   ]);
 
   if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, 7).setValues(rows);
+    sheet.getRange(2, 1, rows.length, 8).setValues(rows);
   }
 }
 
@@ -410,7 +428,7 @@ function getDashboardData() {
     return getDashboardData();
   }
 
-  const rawValues = sheet.getRange(1, 1, lastRow, Math.max(5, lastCol)).getValues();
+  const rawValues = sheet.getRange(1, 1, lastRow, Math.max(7, lastCol)).getValues();
   const headers = rawValues[0];
   const validRows = [];
 
@@ -430,8 +448,10 @@ function getDashboardData() {
     const completed = isNaN(Number(row[2])) ? 0 : Math.max(0, Number(row[2]));
     const overdue = isNaN(Number(row[3])) ? 0 : Math.max(0, Number(row[3]));
     const severity = isNaN(Number(row[4])) ? 0 : Math.max(0, Number(Number(row[4]).toFixed(2)));
+    const subtasksOpen = isNaN(Number(row[5])) ? 0 : Math.max(0, Number(row[5]));
+    const subtasksCompleted = isNaN(Number(row[6])) ? 0 : Math.max(0, Number(row[6]));
 
-    validRows.push([isoTimestamp, open, completed, overdue, severity]);
+    validRows.push([isoTimestamp, open, completed, overdue, severity, subtasksOpen, subtasksCompleted]);
   }
 
   // Fetch top overdue tasks for dashboard display (limited to TOP_OVERDUE_DISPLAY_ITEMS)
@@ -461,7 +481,7 @@ function getTopOverdueTasksForDisplay() {
       return [];
     }
 
-    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_DISPLAY_ITEMS, lastRow - 1), 7).getValues();
+    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_DISPLAY_ITEMS, lastRow - 1), 8).getValues();
     const tasks = [];
 
     for (let i = 0; i < rawValues.length; i++) {
@@ -475,7 +495,8 @@ function getTopOverdueTasksForDisplay() {
         title: row[3] || '',
         dueDate: row[4] || '',
         overdueDuration: isNaN(Number(row[5])) ? 0 : Number(row[5]),
-        severity: isNaN(Number(row[6])) ? 0 : Number(row[6])
+        severity: isNaN(Number(row[6])) ? 0 : Number(row[6]),
+        parent: row[7] || ''
       });
     }
 
