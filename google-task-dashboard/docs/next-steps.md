@@ -304,6 +304,36 @@ of the dashboard data request and displays only the Top 3.
 
 ---
 
+### 13. Track subtasks separately from parent tasks
+
+📋 **planned**
+
+**Decision:** Subtasks are counted through the existing pipeline (open/completed/overdue/severity) exactly like top-level tasks, same weighting rules. In parallel, subtasks are tagged with their `parent` task ID so they can be queried/reported separately later. Existing KPI cards, velocity, ETA, and landscape weather stay parent-and-subtask-combined — no separate top-level totals for now (kept out of scope to limit surface area; can be split later if the combined number turns out to be misleading).
+
+**Rationale:** Google Tasks API returns a `parent` field (task ID string, omitted for top-level tasks) on every task from `Tasks.Tasks.list()` — no extra API call or `fields` param needed, it's already in the default task resource. One level of nesting only, enforced by the API itself.
+
+**Implementation:**
+
+- `Code.js` — `SHEET_HEADERS`: add `subtasks_open`, `subtasks_completed` columns (append-only, historical rows blank/0 for these two new columns).
+- `Code.js` — `TOP_OVERDUE_HEADERS`: add `parent` column (task ID or empty string for top-level) for future extensibility; subtasks never appear in Top Overdue (no due date, cannot be overdue).
+- `Code.js` — `ingestTaskMetricsInternal()`:
+  - Detect `task.parent` (truthy = subtask).
+  - Accumulate `totalSubtasksOpen` / `totalSubtasksCompleted` in addition to existing `totalOpen` / `totalCompleted` (subtasks currently also count toward `totalOpen`/`totalCompleted` — the new counters are additive bookkeeping, not a re-route).
+  - Existing `totalOverdue` / `totalOverdueSeverity` accumulation unchanged — subtasks without due dates skip overdue logic entirely.
+  - Include `parent: task.parent || ''` when pushing to `overdueTasksList` (only top-level tasks reach here since subtasks have no due date).
+  - Update `snapshot` object and the `sheet.appendRow([...])` call to include the two new numeric fields.
+  - Update `updateTopOverdueSheet()` row mapping and column count from 7 to 8 for `parent`.
+- `Code.js` — `getDashboardData()`: extend `getRange(1, 1, lastRow, Math.max(5, lastCol))` column count from 5 to 7, parse/validate the two new numeric columns same pattern as `open`/`completed`.
+- `Code.js` — `getTopOverdueTasksForDisplay()`: extend range read from 7 to 8 columns, include `parent` in returned task objects (passthrough only, no display logic).
+- `JavaScript.html` — No changes. Subtask counters remain backend-only bookkeeping.
+- `Index.html` — No changes.
+
+**Files:** Code.js
+
+**Effort:** S
+
+---
+
 ## Feature requests
 
 - at the bottom of the dashboard: add a text field that can be copied from 
