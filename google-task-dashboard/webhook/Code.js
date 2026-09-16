@@ -150,7 +150,7 @@ function getSpreadsheetUrl() {
 /**
  * Extracts task weight from title prefix.
  * Prefix rules: no prefix = 1, "!" = 2, "!!" = 3, "!!!" = 4, "!!!!" = 5.
- * Prefix must be at the beginning of the title only.
+ * Longer prefixes are capped at 5. Prefix must be at the beginning of the title only.
  * @param {string} title - Task title
  * @return {number} - Weight (1-5)
  */
@@ -265,6 +265,8 @@ function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
 /**
  * Internal metrics ingestion logic (assumes caller holds the lock).
  * Fetches all tasks, calculates metrics, persists snapshot and top overdue.
+ * Tasks due more than 6 months in the future are intentionally excluded
+ * from all counts to keep metrics focused on actionable work.
  * @return {Object} - snapshot object {timestamp, open, completed, overdue, overdue_severity}
  */
 function ingestTaskMetricsInternal() {
@@ -627,17 +629,15 @@ function deleteOldCompletedTasks(cutoffWeeks) {
 }
 
 /**
- * Extracts UTC calendar date in 'YYYY-MM-DD' format.
+ * Extracts calendar date in 'YYYY-MM-DD' format using the script timezone,
+ * consistent with overdue deadline calculations.
  * @param {string|Date} timestamp
  * @return {string|null}
  */
 function extractCalendarDate(timestamp) {
   const d = new Date(timestamp);
   if (isNaN(d.getTime())) return null;
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return Utilities.formatDate(d, getTimezone(), 'yyyy-MM-dd');
 }
 
 /**
@@ -720,7 +720,6 @@ function compressSheetData(mode) {
       // Hourly mode: recent data (<1 year), keep 1 per fixed 60-minute bucket (latest wins)
       if (candidateRows && candidateRows.length > 0) {
         const ONE_HOUR_MS = 60 * 60 * 1000;
-        const seenBuckets = {}; // bucket -> currently kept rowNumber (latest so far)
 
         for (let i = 0; i < candidateRows.length; i++) {
           const current = candidateRows[i];
