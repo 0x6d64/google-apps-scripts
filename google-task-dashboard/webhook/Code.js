@@ -118,7 +118,7 @@ function getOrCreateSheet() {
 }
 
 /**
- * Retrieves or creates the Top Overdue sheet for storing top 10 overdue tasks.
+ * Retrieves or creates the Top Overdue sheet for storing top overdue tasks.
  * @return {GoogleAppsScript.Spreadsheet.Sheet}
  */
 function getOrCreateTopOverdueSheet() {
@@ -147,11 +147,6 @@ function getSpreadsheetUrl() {
   return sheet.getParent().getUrl();
 }
 
-/**
- * Ingests current task counts across all lists and appends an aggregate row.
- * Handles rate limits, null checks on response items, and locks.
- * @return {Object} The freshly calculated snapshot metrics
- */
 /**
  * Extracts task weight from title prefix.
  * Prefix rules: no prefix = 1, "!" = 2, "!!" = 3, "!!!" = 4, "!!!!" = 5.
@@ -413,8 +408,8 @@ function updateTopOverdueSheet(topOverdueTasks) {
 
 /**
  * Fetches all historical time series metrics from the spreadsheet.
- * Includes data validation and type coercion. Also fetches top 10 overdue tasks.
- * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean, topOverdueTasksTop3: Array<Object> }
+ * Includes data validation and type coercion. Also fetches top overdue tasks.
+ * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean, topOverdueTasksTopX: Array<Object> }
  */
 function getDashboardData() {
   const sheet = getOrCreateSheet();
