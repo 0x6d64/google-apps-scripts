@@ -12,7 +12,7 @@
 </head>
 
 <body>
-  <canvas id="trajectoryWeather"></canvas>
+  <canvas id="trajectoryWeather" aria-hidden="true"></canvas>
 
   <main class="container">
     <!-- Header with Title & Action Controls -->
@@ -25,25 +25,25 @@
 
       <div class="header-actions">
         <button id="btnAdmin" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
-          <span class="btn-icon">⚙️</span> Admin
+          <span class="btn-icon" aria-hidden="true">⚙️</span> Admin
         </button>
         <button id="sheetLink" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
-          <span class="btn-icon">📊</span> View Sheet
+          <span class="btn-icon" aria-hidden="true">📊</span> View Sheet
         </button>
         <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
-          <span class="btn-icon">🔗</span> Launch Google Tasks
+          <span class="btn-icon" aria-hidden="true">🔗</span> Launch Google Tasks
         </a>
         <button id="btnSyncNow" class="btn btn-secondary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts.">
-          <span class="btn-icon">⚡</span> Ingest From Tasks
+          <span class="btn-icon" aria-hidden="true">⚡</span> Ingest From Tasks
         </button>
         <button id="btnReloadData" class="btn btn-primary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs.">
-          <span class="btn-icon">🔄</span> Fetch Data From Sheet
+          <span class="btn-icon" aria-hidden="true">🔄</span> Fetch Data From Sheet
         </button>
       </div>
     </header>
 
     <!-- Status / Feedback Toast Banner -->
-    <div id="statusBanner" class="status-banner hidden"></div>
+    <div id="statusBanner" class="status-banner hidden" role="status"></div>
 
     <!-- Top KPI Summary Cards -->
     <section class="cards">
@@ -84,12 +84,12 @@
       <div class="control-group">
         <span class="control-label">Range:</span>
         <div class="pill-group" id="rangeFilterGroup">
-          <button class="pill" data-range="1" title="Filter chart to show snapshots from the past 1 day">1D</button>
-          <button class="pill" data-range="3" title="Filter chart to show snapshots from the past 3 days">3D</button>
-          <button class="pill" data-range="7" title="Filter chart to show snapshots from the past 7 days">7D</button>
-          <button class="pill" data-range="14" title="Filter chart to show snapshots from the past 14 days">14D</button>
-          <button class="pill active" data-range="30" title="Filter chart to show snapshots from the past 30 days">30D</button>
-          <button class="pill" data-range="all" title="Show all historical snapshot entries">All</button>
+          <button class="pill" data-range="1" aria-pressed="false" title="Filter chart to show snapshots from the past 1 day">1D</button>
+          <button class="pill" data-range="3" aria-pressed="false" title="Filter chart to show snapshots from the past 3 days">3D</button>
+          <button class="pill" data-range="7" aria-pressed="false" title="Filter chart to show snapshots from the past 7 days">7D</button>
+          <button class="pill" data-range="14" aria-pressed="false" title="Filter chart to show snapshots from the past 14 days">14D</button>
+          <button class="pill active" data-range="30" aria-pressed="true" title="Filter chart to show snapshots from the past 30 days">30D</button>
+          <button class="pill" data-range="all" aria-pressed="false" title="Show all historical snapshot entries">All</button>
         </div>
       </div>
 
@@ -122,7 +122,7 @@
         <span class="panel-badge">Stacked Lines + Severity Overlay</span>
       </div>
       <div id="mainChart" class="chart-container">
-        <div class="loading-spinner">Loading chart data...</div>
+        <div class="loading-spinner" role="status">Loading chart data...</div>
       </div>
     </section>
 
@@ -142,7 +142,7 @@
       <details class="danger-zone-details">
         <summary class="danger-zone-summary" title="Click to expand or collapse dangerous maintenance options">
           <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
-          <span class="summary-arrow">→</span>
+          <span class="summary-arrow" aria-hidden="true">→</span>
         </summary>
         <div class="danger-zone-content">
           <div class="danger-zone-setting">
@@ -171,13 +171,13 @@
 
           <div class="danger-zone-actions">
             <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact.">
-              <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
+              <span class="btn-icon" aria-hidden="true">🗑️</span> Delete Old Done Tasks (>8w)
             </button>
             <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days to at most 1 entry per rolling 60-minute window, keeping the latest snapshot in each window. Permanently removes intra-hour data.">
-              <span class="btn-icon">📉</span> Downsample Last Year (1/hour)
+              <span class="btn-icon" aria-hidden="true">📉</span> Downsample Last Year (1/hour)
             </button>
             <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed.">
-              <span class="btn-icon">🧹</span> Prune Old Data (>1 year)
+              <span class="btn-icon" aria-hidden="true">🧹</span> Prune Old Data (>1 year)
             </button>
           </div>
         </div>

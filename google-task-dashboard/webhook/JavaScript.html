@@ -1630,7 +1630,9 @@
 
       const pills = document.querySelectorAll('#rangeFilterGroup .pill');
       pills.forEach(p => {
-        p.classList.toggle('active', p.getAttribute('data-range') === String(range));
+        const isActive = p.getAttribute('data-range') === String(range);
+        p.classList.toggle('active', isActive);
+        p.setAttribute('aria-pressed', isActive ? 'true' : 'false');
       });
 
       // Recalculate KPIs (velocity, backlog estimate) when range changes
