@@ -465,6 +465,7 @@
     function init() {
       initNotifications();
       initAdminLink();
+      setupEventWiring();
       const sheetBtn = document.getElementById('sheetLink');
       if (sheetBtn) {
         sheetBtn.addEventListener('click', () => openLinkButtonUrl('sheetLink'));
@@ -478,6 +479,36 @@
       setupPageVisibilityHandler();
       if (autoFetchEnabled) {
         startAutoFetch();
+      }
+    }
+
+    /**
+     * Wires all dashboard controls to their handlers (replaces inline on* attributes).
+     */
+    function setupEventWiring() {
+      const on = (id, event, handler) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener(event, handler);
+      };
+
+      on('btnSyncNow', 'click', handleSyncNow);
+      on('btnReloadData', 'click', handleReloadData);
+      on('btnDeleteOldCompleted', 'click', handleDeleteOldCompletedTasks);
+      on('btnDownsampleLastYear', 'click', handleDownsampleLastYear);
+      on('btnPruneOldData', 'click', handlePruneOldData);
+      on('toggleAutoTrigger', 'change', (e) => handleTriggerToggle(e.target.checked));
+
+      ['toggleOpen', 'toggleOverdue', 'toggleCompleted', 'toggleSeverity', 'toggleRollingAvg']
+        .forEach((id) => on(id, 'change', updateChartVisibility));
+
+      const rangeGroup = document.getElementById('rangeFilterGroup');
+      if (rangeGroup) {
+        rangeGroup.addEventListener('click', (e) => {
+          const pill = e.target.closest('.pill');
+          if (!pill) return;
+          const raw = pill.getAttribute('data-range');
+          setRangeFilter(raw === 'all' ? 'all' : Number(raw));
+        });
       }
     }
 
@@ -846,7 +877,7 @@
         
         const elem = document.getElementById('lastSheetFetchAge');
         if (elem) {
-          elem.style.display = 'block';
+          elem.classList.remove('hidden');
           setElemText('lastSheetFetchAge',
             'Last sheet fetch: ' + lastDate.toLocaleString() + ' ' + tzAbbr + ' (' + timeAgoStr + ')');
         }
@@ -1009,7 +1040,7 @@
       if (!estCard) return;
 
       if (!rows || rows.length === 0) {
-        estCard.style.display = 'none';
+        estCard.classList.add('hidden');
         return;
       }
 
@@ -1020,9 +1051,9 @@
 
       // Show card unless backlog is zero
       if (estimate === '0') {
-        estCard.style.display = 'none';
+        estCard.classList.add('hidden');
       } else {
-        estCard.style.display = 'block';
+        estCard.classList.remove('hidden');
         const label = document.getElementById('backlogEstimateValue');
         const note = document.getElementById('backlogEstimateNote');
         const counts = document.getElementById('backlogCountsNote');
@@ -1054,9 +1085,9 @@
           const tasksAdded = calculateTasksAdded(windowRows);
           const tasksCompleted = calculateCompletionsInWindow(windowRows);
           counts.textContent = tasksAdded + ' added / ' + tasksCompleted + ' completed this period';
-          counts.style.display = 'block';
+          counts.classList.remove('hidden');
         } else if (counts) {
-          counts.style.display = 'none';
+          counts.classList.add('hidden');
         }
       }
     }
@@ -1897,12 +1928,11 @@
       if (!banner) return;
       banner.className = 'status-banner ' + type;
       banner.innerText = message;
-      banner.style.display = 'block';
     }
 
     function hideStatus() {
       const banner = document.getElementById('statusBanner');
-      if (banner) banner.style.display = 'none';
+      if (banner) banner.classList.add('hidden');
     }
 
     /**
@@ -1917,11 +1947,11 @@
       if (!panel || !list) return;
 
       if (!topTasks || topTasks.length === 0) {
-        panel.style.display = 'none';
+        panel.classList.add('hidden');
         return;
       }
 
-      panel.style.display = 'block';
+      panel.classList.remove('hidden');
       list.innerHTML = '';
 
       for (let i = 0; i < topTasks.length; i++) {
