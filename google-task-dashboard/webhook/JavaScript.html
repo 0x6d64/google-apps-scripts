@@ -37,17 +37,17 @@
     // Trajectory Weather landscape constants
     const LANDSCAPE_BASELINE_WINDOW_DAYS = 14;
     const LANDSCAPE_ALL_RANGE_WINDOW_DAYS = 30;
-    const LANDSCAPE_TRANSITION_DURATION_S = 1.5;  // 1.5s smooth transition on range change
+    const LANDSCAPE_TRANSITION_DURATION_S = 0.75;  // 0.75s smooth transition on range change
     const LANDSCAPE_METRIC_NEUTRAL = 0.5;
     const LANDSCAPE_TREND_CENTER = 0.85;
     const LANDSCAPE_TREND_SCALE = 0.3;
     const LANDSCAPE_MAX_FRAME_DT = 0.05;
-    const LANDSCAPE_WEATHER_THRESHOLDS = {
-      storm: 0.20,
-      heavy: 0.40,
-      steady: 0.60,
-      clearing: 0.78
-    };
+    const LANDSCAPE_AMBIENT_INTERVAL_MS = 250; // 4fps ambient tick when idle
+    // Band midpoints of the weather states above. Cloud appearance
+    // interpolates continuously between stops so range changes morph
+    // instead of snapping at threshold boundaries (design brief §3.1).
+    const LANDSCAPE_WEATHER_STOPS = [0.10, 0.30, 0.50, 0.69, 0.89];
+    const LANDSCAPE_SNOW_LINE = 0.70; // ridge peaks above this get snow caps
     const LANDSCAPE_WEATHER_STATES = [
       { key: 'storm', color: '#3c4750', opacityMid: 0.72, sizeMid: 96, vxRange: [42, 56], spawnMs: [260, 440], rain: true },
       { key: 'heavy', color: '#556169', opacityMid: 0.58, sizeMid: 74, vxRange: [34, 46], spawnMs: [520, 760], rain: true },
@@ -88,11 +88,13 @@
       let foregroundCanvas, foregroundCtx;
       let dpr = 1;
       let W = 0, H = 0;
-      let ridgeSeedBack = [];
-      let ridgeSeedFront = [];
       let treeSeed = [];
+      let snowCaps = []; // normalized {nx, ny, nw, nh} snow triangles, drawn per-frame
+      let grainTile = null;
       let lastFrameTs = null;
       let started = false;
+      let rafRunning = false;
+      let ambientTimer = null;
 
       const state = {
         currentMetric: LANDSCAPE_METRIC_NEUTRAL,
@@ -123,13 +125,37 @@
         return 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',' + alpha + ')';
       }
 
-      function stateFor(metric) {
-        const t = LANDSCAPE_WEATHER_THRESHOLDS;
-        if (metric < t.storm) return LANDSCAPE_WEATHER_STATES[0];
-        if (metric < t.heavy) return LANDSCAPE_WEATHER_STATES[1];
-        if (metric < t.steady) return LANDSCAPE_WEATHER_STATES[2];
-        if (metric < t.clearing) return LANDSCAPE_WEATHER_STATES[3];
-        return LANDSCAPE_WEATHER_STATES[4];
+      function rgbToHex(rgb) {
+        const h = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+        return '#' + h(rgb.r) + h(rgb.g) + h(rgb.b);
+      }
+
+      /**
+       * Interpolates cloud appearance continuously across the metric range
+       * by blending adjacent weather stops. Any metric change — however
+       * small — produces visible motion instead of snapping at buckets.
+       * @param {number} metric - Health metric in [0, 1]
+       */
+      function weatherAt(metric) {
+        const m = clamp(metric, 0, 1);
+        let i = 0;
+        while (i < LANDSCAPE_WEATHER_STOPS.length - 2 && m > LANDSCAPE_WEATHER_STOPS[i + 1]) i++;
+        const lo = LANDSCAPE_WEATHER_STATES[i];
+        const hi = LANDSCAPE_WEATHER_STATES[i + 1];
+        const span = LANDSCAPE_WEATHER_STOPS[i + 1] - LANDSCAPE_WEATHER_STOPS[i];
+        const t = span > 0 ? clamp((m - LANDSCAPE_WEATHER_STOPS[i]) / span, 0, 1) : 0;
+        const loRgb = hexToRgb(lo.color);
+        const hiRgb = hexToRgb(hi.color);
+        return {
+          color: rgbToHex({
+            r: lerp(loRgb.r, hiRgb.r, t),
+            g: lerp(loRgb.g, hiRgb.g, t),
+            b: lerp(loRgb.b, hiRgb.b, t)
+          }),
+          opacityMid: lerp(lo.opacityMid, hi.opacityMid, t),
+          sizeMid: lerp(lo.sizeMid, hi.sizeMid, t),
+          rain: lerp(lo.rain ? 1 : 0, hi.rain ? 1 : 0, t) > 0.5
+        };
       }
 
       /**
@@ -142,6 +168,7 @@
           state.startMetric = state.currentMetric;  // capture where we are NOW
           state.targetMetric = metric;
           state.transitionProgress = 0.0;
+          kickTransitionLoop();
         }
       }
 
@@ -169,28 +196,52 @@
         canvas.style.width = W + 'px';
         canvas.style.height = H + 'px';
 
-        ridgeSeedBack = [];
-        ridgeSeedFront = [];
         treeSeed = [];
 
         drawBackdrop();
         drawForeground();
+        render(Date.now() / 1000);
       }
 
-      function buildRidge(seedArr, count) {
-        if (seedArr.length === 0) {
-          for (let i = 0; i <= count; i++) seedArr.push(Math.random());
+      /**
+       * Deterministic 1D value noise (no dependencies). Produces organic
+       * ridgelines that stay identical across resizes.
+       */
+      function makeNoise1D(seed) {
+        const hash = (i) => {
+          const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+          return x - Math.floor(x);
+        };
+        const fade = (t) => t * t * (3 - 2 * t);
+        return (x) => {
+          const i = Math.floor(x);
+          const t = fade(x - i);
+          return hash(i) * (1 - t) + hash(i + 1) * t;
+        };
+      }
+
+      const ridgeNoiseBack = makeNoise1D(7.3);
+      const ridgeNoiseFront = makeNoise1D(21.7);
+
+      function buildRidgeSeeds(count, noise, freq) {
+        const seeds = [];
+        for (let i = 0; i <= count; i++) {
+          const x = (i / count) * freq;
+          seeds.push(0.30 + 0.70 * (0.62 * noise(x) + 0.38 * noise(x * 2.63 + 5.2)));
         }
-        return seedArr;
+        return seeds;
       }
 
-      function drawRidge(c, seeds, baseY, amp, color, alpha) {
-        c.globalAlpha = alpha;
-        c.fillStyle = color;
-        c.beginPath();
-        c.moveTo(0, H);
+      // Layer offsets filled by mouse parallax (identity until then).
+      const viewShift = { bx: 0, by: 0 };
+
+      function backdropToScreen(nx, ny) {
+        return { x: nx * W + viewShift.bx, y: ny * H + viewShift.by };
+      }
+
+      function traceRidgeTop(c, seeds, baseY, amp) {
         const step = W / (seeds.length - 1);
-        c.lineTo(0, baseY - seeds[0] * amp);
+        c.moveTo(0, baseY - seeds[0] * amp);
         for (let i = 1; i < seeds.length; i++) {
           const x = i * step;
           const y = baseY - seeds[i] * amp;
@@ -200,10 +251,40 @@
           c.quadraticCurveTo(prevX, prevY, cx, (prevY + y) / 2);
         }
         c.lineTo(W, baseY);
+      }
+
+      function drawRidge(c, seeds, baseY, amp, color, alpha, highlight) {
+        c.globalAlpha = alpha;
+        c.fillStyle = color;
+        c.beginPath();
+        c.moveTo(0, H);
+        traceRidgeTop(c, seeds, baseY, amp);
         c.lineTo(W, H);
         c.closePath();
         c.fill();
+        if (highlight) {
+          c.strokeStyle = highlight;
+          c.lineWidth = 2;
+          c.beginPath();
+          traceRidgeTop(c, seeds, baseY, amp);
+          c.stroke();
+        }
         c.globalAlpha = 1;
+      }
+
+      function getGrainTile() {
+        if (grainTile) return grainTile;
+        grainTile = document.createElement('canvas');
+        grainTile.width = grainTile.height = 128;
+        const g = grainTile.getContext('2d');
+        const img = g.createImageData(128, 128);
+        for (let i = 0; i < img.data.length; i += 4) {
+          const v = 118 + Math.floor(Math.random() * 20);
+          img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+          img.data[i + 3] = 255;
+        }
+        g.putImageData(img, 0, 0);
+        return grainTile;
       }
 
       function drawBackdrop() {
@@ -219,11 +300,69 @@
         backdropCtx.fillStyle = sky;
         backdropCtx.fillRect(0, 0, W, H);
 
-        const seedsBack = buildRidge(ridgeSeedBack, 10);
-        drawRidge(backdropCtx, seedsBack, H * 0.66, H * 0.16, '#9fc0b8', 0.85);
+        const seedsBack = buildRidgeSeeds(14, ridgeNoiseBack, 3.2);
+        drawRidge(backdropCtx, seedsBack, H * 0.66, H * 0.16, '#9fc0b8', 0.85, 'rgba(220,232,228,0.8)');
 
-        const seedsFront = buildRidge(ridgeSeedFront, 12);
-        drawRidge(backdropCtx, seedsFront, H * 0.72, H * 0.13, '#7fa39a', 1);
+        const seedsFront = buildRidgeSeeds(16, ridgeNoiseFront, 4.1);
+        drawRidge(backdropCtx, seedsFront, H * 0.72, H * 0.13, '#7fa39a', 1, 'rgba(200,216,210,0.9)');
+
+        // Snow caps on the back ridge, stored normalized for per-frame drawing.
+        snowCaps = [];
+        const stepBack = W / (seedsBack.length - 1);
+        for (let i = 0; i < seedsBack.length; i++) {
+          if (seedsBack[i] > LANDSCAPE_SNOW_LINE) {
+            const px = i * stepBack;
+            const py = H * 0.66 - seedsBack[i] * H * 0.16;
+            snowCaps.push({
+              nx: px / W,
+              ny: py / H,
+              nw: (stepBack * (0.55 + seedsBack[i] * 0.5)) / W,
+              nh: 0.16 * 0.22
+            });
+          }
+        }
+
+        // Vignette to focus the centered content.
+        const vig = backdropCtx.createRadialGradient(
+          W / 2, H * 0.45, Math.min(W, H) * 0.35,
+          W / 2, H * 0.45, Math.max(W, H) * 0.75
+        );
+        vig.addColorStop(0, 'rgba(20,30,40,0)');
+        vig.addColorStop(1, 'rgba(20,30,40,0.22)');
+        backdropCtx.fillStyle = vig;
+        backdropCtx.fillRect(0, 0, W, H);
+
+        // Subtle film grain to kill gradient banding.
+        backdropCtx.save();
+        backdropCtx.globalAlpha = 0.05;
+        backdropCtx.fillStyle = backdropCtx.createPattern(getGrainTile(), 'repeat');
+        backdropCtx.fillRect(0, 0, W, H);
+        backdropCtx.restore();
+      }
+
+      /**
+       * Draws snow caps with metric-driven opacity: heavier snow in storms,
+       * faint dusting when clear.
+       */
+      function drawSnowCaps(c, metric) {
+        if (snowCaps.length === 0) return;
+        const alpha = clamp((0.6 - metric) / 0.5, 0.12, 0.92);
+        c.save();
+        c.globalAlpha = alpha;
+        c.fillStyle = '#f4f8fa';
+        for (let i = 0; i < snowCaps.length; i++) {
+          const s = snowCaps[i];
+          const p = backdropToScreen(s.nx, s.ny);
+          const w = (s.nw * W) / 2;
+          const h = s.nh * H;
+          c.beginPath();
+          c.moveTo(p.x - w, p.y + h);
+          c.lineTo(p.x, p.y - 2);
+          c.lineTo(p.x + w, p.y + h);
+          c.closePath();
+          c.fill();
+        }
+        c.restore();
       }
 
       function drawTree(c, x, y, h, color) {
@@ -379,9 +518,11 @@
         ctx.clearRect(0, 0, W, H);
         ctx.drawImage(backdropCanvas, 0, 0, W, H);
 
+        drawSnowCaps(ctx, state.currentMetric);
+
         drawSun(ctx, state.currentMetric, time);
 
-        const weather = stateFor(state.currentMetric);
+        const weather = weatherAt(state.currentMetric);
         const now = Date.now();
 
         if (rawData && rawData.rows && rawData.rows.length > 0) {
@@ -422,6 +563,7 @@
       }
 
       function frame(ts) {
+        rafRunning = true;
         if (lastFrameTs === null) lastFrameTs = ts;
         const dt = Math.min(LANDSCAPE_MAX_FRAME_DT, (ts - lastFrameTs) / 1000);
         lastFrameTs = ts;
@@ -429,7 +571,35 @@
         updateTransition(dt);
         render(ts / 1000);
 
-        requestAnimationFrame(frame);
+        if (state.transitionProgress < 1.0) {
+          requestAnimationFrame(frame);
+        } else {
+          rafRunning = false;
+          startAmbient();
+        }
+      }
+
+      /**
+       * Slow ambient repaint for the near-static scene (cloud bob and drift).
+       * Full-rate rAF runs only while a transition is in flight.
+       */
+      function startAmbient() {
+        if (ambientTimer) return;
+        ambientTimer = setInterval(() => {
+          if (document.hidden || state.transitionProgress < 1.0) return;
+          render(Date.now() / 1000);
+        }, LANDSCAPE_AMBIENT_INTERVAL_MS);
+      }
+
+      /**
+       * Hands rendering back to full-rate rAF for a transition.
+       */
+      function kickTransitionLoop() {
+        if (ambientTimer) {
+          clearInterval(ambientTimer);
+          ambientTimer = null;
+        }
+        if (!rafRunning) requestAnimationFrame(frame);
       }
 
       function init() {
@@ -447,7 +617,8 @@
 
         if (!started) {
           started = true;
-          requestAnimationFrame(frame);
+          render(Date.now() / 1000);
+          startAmbient();
         }
       }
 
