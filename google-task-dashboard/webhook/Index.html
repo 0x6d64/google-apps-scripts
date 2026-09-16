@@ -3,7 +3,6 @@
 <head>
   <base target="_top">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google Tasks Dashboard</title>
 
   <?!= include('Styles'); ?>
@@ -25,12 +24,12 @@
       </div>
 
       <div class="header-actions">
-        <a id="btnAdmin" href="#" target="_blank" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
+        <button id="btnAdmin" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
           <span class="btn-icon">⚙️</span> Admin
-        </a>
-        <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
+        </button>
+        <button id="sheetLink" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
           <span class="btn-icon">📊</span> View Sheet
-        </a>
+        </button>
         <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
           <span class="btn-icon">🔗</span> Launch Google Tasks
         </a>
@@ -86,10 +85,10 @@
         <span class="control-label">Range:</span>
         <div class="pill-group" id="rangeFilterGroup">
           <button class="pill" data-range="1" title="Filter chart to show snapshots from the past 1 day" onclick="DashboardApp.setRangeFilter(1)">1D</button>
-          <button class="pill active" data-range="3" title="Filter chart to show snapshots from the past 3 days" onclick="DashboardApp.setRangeFilter(3)">3D</button>
+          <button class="pill" data-range="3" title="Filter chart to show snapshots from the past 3 days" onclick="DashboardApp.setRangeFilter(3)">3D</button>
           <button class="pill" data-range="7" title="Filter chart to show snapshots from the past 7 days" onclick="DashboardApp.setRangeFilter(7)">7D</button>
           <button class="pill" data-range="14" title="Filter chart to show snapshots from the past 14 days" onclick="DashboardApp.setRangeFilter(14)">14D</button>
-          <button class="pill" data-range="30" title="Filter chart to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
+          <button class="pill active" data-range="30" title="Filter chart to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
           <button class="pill" data-range="all" title="Show all historical snapshot entries" onclick="DashboardApp.setRangeFilter('all')">All</button>
         </div>
       </div>

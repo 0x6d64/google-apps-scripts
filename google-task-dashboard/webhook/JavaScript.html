@@ -465,6 +465,10 @@
     function init() {
       initNotifications();
       initAdminLink();
+      const sheetBtn = document.getElementById('sheetLink');
+      if (sheetBtn) {
+        sheetBtn.addEventListener('click', () => openLinkButtonUrl('sheetLink'));
+      }
       Landscape.init();
       google.charts.load('current', { packages: ['corechart'] });
       google.charts.setOnLoadCallback(fetchData);
@@ -490,13 +494,27 @@
     }
 
     /**
+     * Opens the runtime URL stored on a link button in a new tab (no-op until set).
+     * @param {string} elementId
+     */
+    function openLinkButtonUrl(elementId) {
+      const btn = document.getElementById(elementId);
+      if (btn && btn.dataset.url) {
+        window.open(btn.dataset.url, '_blank', 'noopener');
+      }
+    }
+
+    /**
      * Initializes the admin link button with the script project ID.
      */
     function initAdminLink() {
+      const adminBtn = document.getElementById('btnAdmin');
+      if (adminBtn) {
+        adminBtn.addEventListener('click', () => openLinkButtonUrl('btnAdmin'));
+      }
       google.script.run.withSuccessHandler((scriptId) => {
-        const adminBtn = document.getElementById('btnAdmin');
         if (adminBtn && scriptId) {
-          adminBtn.href = 'https://script.google.com/home/projects/' + scriptId + '/edit';
+          adminBtn.dataset.url = 'https://script.google.com/home/projects/' + scriptId + '/edit';
         }
       }).getScriptProjectId();
     }
@@ -748,7 +766,7 @@
 
       if (data.sheetUrl) {
         const link = document.getElementById('sheetLink');
-        if (link) link.href = data.sheetUrl;
+        if (link) link.dataset.url = data.sheetUrl;
       }
 
       const triggerBox = document.getElementById('toggleAutoTrigger');
