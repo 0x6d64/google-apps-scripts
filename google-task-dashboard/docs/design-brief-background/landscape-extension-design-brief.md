@@ -33,7 +33,7 @@ The landscape is **always visible** but **never dominant** — it provides atmos
 
 **Animation**:
 - Clouds drift right-to-left continuously (smooth, unrelated to metric changes).
-- Weather state transitions (color/opacity/spawn rate) are smooth: 0.6–1.0s lerp when range changes.
+- Weather state transitions (color/opacity/spawn rate) are smooth: 0.75s lerp when range changes.
 
 ---
 
@@ -97,7 +97,7 @@ When the user clicks a range filter button (e.g., 1D → 3D):
 
 1. **Compute new metric** from the selected range data.
 2. **Set target weather state** based on new metric (using `WeatherModel.stateFor()`).
-3. **Animate transition** over 0.6–1.0s:
+3. **Animate transition** over 0.75s:
    - Cloud colors lerp to target color.
    - Cloud opacity lerps to target opacity.
    - Spawn rate smoothly adjusts (new clouds spawn at the new rate).
@@ -325,7 +325,7 @@ All tunable parameters extracted to named constants:
 const LANDSCAPE = {
   BASELINE_WINDOW_DAYS: 14,           // stable reference for metric
   METRIC_DISPLAY_WINDOW_DAYS: 30,     // used for "All" range
-  TRANSITION_DURATION_MS: 800,        // smooth state change animation
+  TRANSITION_DURATION_MS: 750,        // smooth state change animation
   CLOUD_DRIFT_PX_PER_SEC: 35,        // right-to-left movement
   LANDSCAPE_CANVAS_Z_INDEX: -1,
   
@@ -522,7 +522,7 @@ const LandscapeRenderer = {
   currentMetric: 0.5,
   targetMetric: 0.5,
   transitionProgress: 1.0,
-  transitionDuration: 0.8,
+  transitionDuration: 0.75,
   
   setTargetMetric: function(metric) {
     if (Math.abs(this.targetMetric - metric) > 0.01) {
