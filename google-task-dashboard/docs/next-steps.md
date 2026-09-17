@@ -57,13 +57,13 @@ When editing this doc, use the following guidelines:
 
 ✅ **DONE**
 
-**Implementation:** Every action modifying the Google Sheet (ingest, purge, delete old, downsample, prune) automatically fetches latest data from Sheet without user clicking "Fetch Data From Sheet".
+**Implementation:** Every action modifying the Google Sheet (ingest, delete old, downsample, prune) automatically fetches latest data from Sheet without user clicking "Fetch Data From Sheet".
 
 **Changes:**
 - Added `refreshDashboardData()` helper that calls `getDashboardData()` (Sheet only, never Tasks API)
 - Updated `handlePruneOldData()` to call `refreshDashboardData()` after success
 - Updated `handleDownsampleLastYear()` to call `refreshDashboardData()` after success
-- Other destructive actions (delete old, purge, sync) already had refresh logic
+- Other destructive actions (delete old, sync) already had refresh logic
 
 **Files:** JavaScript.html
 
@@ -178,27 +178,27 @@ Applied consistently to aggregate overdue count and severity.
 ✅ **DONE**
 
 **Implementation:** During the existing Tasks API ingestion, identify the
-10 currently open tasks with the greatest overdue duration. Use the overdue
+20 currently open tasks with the greatest overdue duration. Use the overdue
 calculation defined in item 6. Calculate individual overdue severity using the
-same `sqrt(days_overdue)` formula as the aggregate metric. Store the Top 10 in
+same `sqrt(days_overdue)` formula as the aggregate metric. Store the Top 20 in
 a dedicated sheet in the same Google Sheets file, replacing the previous
 cache-based approach. The sheet is human-readable and exposes the current
-overdue task ranking. The dashboard reads the Top 10 from the sheet as part
-of the dashboard data request and displays only the Top 3.
+overdue task ranking. The dashboard reads the Top 20 from the sheet as part
+of the dashboard data request and displays only the Top 5.
 
 **Changes:**
 
-- Maintain the 10 most overdue tasks during ingestion.
+- Maintain the 20 most overdue tasks during ingestion.
 - Include task ID, task list ID, task list name, title, due date, overdue
   duration, and individual severity.
-- Store the Top 10 in a dedicated sheet in the same Google Sheets file.
+- Store the Top 20 in a dedicated sheet in the same Google Sheets file.
 - Replace the previous `CacheService` storage (if it exists) with sheet storage.
-- Read the Top 10 from the sheet as part of the dashboard data request.
-- Display only the Top 3 overdue tasks on the dashboard as defined by the
+- Read the Top 20 from the sheet as part of the dashboard data request.
+- Display only the Top 5 overdue tasks on the dashboard as defined by the
   requirements.
-- Expose the full Top 10 in the sheet for human readers.
-- Hide the Top 3 section when the sheet contains no overdue tasks.
-- Keep Top 10 overdue calculations consistent with the aggregate overdue
+- Expose the full Top 20 in the sheet for human readers.
+- Hide the Top 5 section when the sheet contains no overdue tasks.
+- Keep Top 20 overdue calculations consistent with the aggregate overdue
   metrics.
 
 **Files:** requirements.md, Code.js, JavaScript.html
@@ -268,11 +268,11 @@ of the dashboard data request and displays only the Top 3.
 
 ✅ **DONE**
 
-**Implementation:** Clarified the distinction between how many overdue tasks are retained in the sheet (10, for human inspection and extensibility) versus how many are displayed on the dashboard (5, for UI real estate). Two independent constants with clear semantics prevent future confusion between storage capacity and display limits.
+**Implementation:** Clarified the distinction between how many overdue tasks are retained in the sheet (20, for human inspection and extensibility) versus how many are displayed on the dashboard (5, for UI real estate). Two independent constants with clear semantics prevent future confusion between storage capacity and display limits.
 
 **Changes:**
 - Replaced ambiguous `const TOP_OVERDUE_ITEMS = 5` with:
-  - `const TOP_OVERDUE_STORAGE_ITEMS = 10` — rows retained in Top Overdue sheet
+  - `const TOP_OVERDUE_STORAGE_ITEMS = 20` — rows retained in Top Overdue sheet
   - `const TOP_OVERDUE_DISPLAY_ITEMS = 5` — tasks shown on dashboard
 - Updated `ingestTaskMetricsInternal()` to slice to `TOP_OVERDUE_STORAGE_ITEMS`
 - Renamed `getTopOverdueTasksTopX()` → `getTopOverdueTasksForDisplay()` for clarity
@@ -293,7 +293,7 @@ of the dashboard data request and displays only the Top 3.
 **Implementation:** Reduced per-row processing overhead in `getDashboardData()` by fixing column range, eliminating redundant number conversions, and caching the trigger check. These changes measurably improve dashboard load times when the sheet contains 500+ historic snapshots.
 
 **Changes:**
-- Changed `getRange(1, 1, lastRow, Math.max(5, lastCol))` → `getRange(1, 1, lastRow, 5)` — reads exactly 5 columns instead of potentially 10+
+- Changed `getRange(1, 1, lastRow, Math.max(7, lastCol))` → fixed 7-column read — exactly the metrics columns, no more, no less
 - Simplified severity parsing: store `severityNum = Number(row[4])` once, use directly (removed double-conversion via `toFixed()`)
 - Cached `isTriggerActive()` result into local variable instead of calling inline in return object
 - Clarified comment on auto-init path (calls `ingestTaskMetricsInternal()` directly, no lock needed for single execution)
@@ -306,7 +306,7 @@ of the dashboard data request and displays only the Top 3.
 
 ### 13. Track subtasks separately from parent tasks
 
-📋 **planned**
+✅ **DONE**
 
 **Decision:** Subtasks are counted through the existing pipeline (open/completed/overdue/severity) exactly like top-level tasks, same weighting rules. In parallel, subtasks are tagged with their `parent` task ID so they can be queried/reported separately later. Existing KPI cards, velocity, ETA, and landscape weather stay parent-and-subtask-combined — no separate top-level totals for now (kept out of scope to limit surface area; can be split later if the combined number turns out to be misleading).
 

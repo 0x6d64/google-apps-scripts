@@ -27,7 +27,8 @@ auth = sufficient security.
 
 ### Metrics (per snapshot)
 
-- `timestamp`, `open`, `completed`, `overdue`, `overdue_severity`
+- `timestamp`, `open`, `completed`, `overdue`, `overdue_severity`,
+  `subtasks_open`, `subtasks_completed`
 - `open`: incomplete tasks, excluding due-date >6mo in future (undated tasks
   always included)
 - `overdue`: open tasks with a due date whose effective overdue deadline has
@@ -46,7 +47,8 @@ auth = sufficient security.
 ### Apps Script backend
 
 - Auto-create Sheet on first run if `SPREADSHEET_ID` property missing;
-  header row: `timestamp, open, completed, overdue, overdue_severity`
+  header row: `timestamp, open, completed, overdue, overdue_severity,
+  subtasks_open, subtasks_completed`
 - Auto-install 3h trigger on first run if `AUTO_SYNC_ENABLED` unset (default
   `'true'`); `setTriggerEnabled(bool)` toggles trigger + property
 - `ingestTaskMetrics()` — live pull from Tasks API, append row
@@ -57,14 +59,14 @@ auth = sufficient security.
   older than cutoff, keep recent ones, re-ingest after
 - `downsampleLastYearToHourly()` — collapse last-365-day rows using the
   configured age-based downsampling policy, latest-wins
-- During `ingestTaskMetrics()`, calculate the top 10 overdue open tasks
+- During `ingestTaskMetrics()`, calculate the top 20 overdue open tasks
   and store them in a dedicated "Top Overdue" sheet in the same Google Sheets
   file. Include task ID, task list ID, task list name, title, due date,
-  overdue duration, and individual severity. Sheet is retained for human
-  inspection and future extensibility.
+  overdue duration, individual severity, and parent task ID. Sheet is retained
+  for human inspection and future extensibility.
 - `getDashboardData()` reads the top 5 overdue tasks from the Top Overdue
   sheet (display limit) for dashboard rendering. If no overdue tasks exist,
-  the section is hidden. Sheet may contain up to 10 tasks.
+  the section is hidden. Sheet may contain up to 20 tasks.
 - Top Overdue sheet updates on every `ingestTaskMetrics()` call; deletes all
   prior data rows and appends fresh top 10.
 - `pruneDataOlderThan1Year()` — collapse >365-day rows to 1/calendar-day
@@ -111,7 +113,7 @@ auth = sufficient security.
 - Primary chart: stacked area (Overdue → On-Time Open → Completed, in that
   order) + Severity as independent line on secondary axis
 - Series toggle checkboxes control visibility of all 4 series independently
-- Range filter: 3D / 7D / 14D / 30D / All, client-side (no backend call)
+- Range filter: 1D / 3D / 7D / 14D / 30D / All, client-side (no backend call)
 - Downsampling: long ranges binned to ~50 buckets for render only; KPIs use
   full data
 - Rolling average / trend line (optional toggle): dotted, reduced opacity.
@@ -125,8 +127,8 @@ auth = sufficient security.
 - View Sheet (link), Launch Google Tasks (link), Fetch Data From Sheet
   (Sheet only), Ingest From Tasks (Tasks API + append + refresh)
 - Danger Zone: collapsed by default, ordered by destructive impact
-  (highest→lowest): Purge Completed → Delete Old Done (>8w) → Downsample
-  Last Year → Prune Old Data (>1y)
+  (highest→lowest): Delete Old Done (>8w) → Downsample Last Year →
+  Prune Old Data (>1y)
 - Auto-fetch (Sheet only, never Tasks API): toggle + interval (15/30/60min),
   default on. Pauses when tab hidden. On refocus, fetch immediately if
   interval elapsed while hidden, then resume timer.
@@ -149,10 +151,11 @@ auth = sufficient security.
 - **Weighted task-priority velocity** (`!`, `!!`, `!!!`, `!!!!` prefixes):
   weight = prefix_count + 1 (no prefix → 1, `!` → 2, `!!` → 3, `!!!` → 4,
   `!!!!` → 5). Calculated live during ingestion by summing
-  `getTaskWeight(title)` for each completed task. Weighted velocity available
-  only for current session (most recent ingestion); historical snapshots
-  silently fall back to unweighted velocity since spreadsheet stores only
-  aggregate completed count, not per-task weights. No schema changes.
+  `getTaskWeight(title)` for each task. Weights are stored in the snapshot
+  rows themselves, so historical weighted velocity survives reloads;
+  pre-weighting snapshots remain unweighted.
+- Subtask counts (`subtasks_open`, `subtasks_completed`) are stored
+  alongside the aggregates; the Top Overdue sheet carries a `parent` column.
 - **Stacked average double-counting**: when accumulating a running
   `stackBase` across layers, add the *raw* per-layer average each time —
   not the already-stacked cumulative value. Adding the stacked value back
