@@ -2447,13 +2447,13 @@
       modal.innerHTML = `
         <div class="modal-card">
           <h3>✅ Downsampling Complete</h3>
-          <table class="prune-stats-table">
-            <tr><td>Total rows before:</td><td>${result.totalBefore}</td></tr>
-            <tr><td>Rows removed:</td><td>${result.totalRemoved}</td></tr>
-            <tr><td>Rows remaining:</td><td>${result.totalAfter}</td></tr>
-            <tr><td>Percentage removed:</td><td>${Number(result.percentageRemoved || 0).toFixed(1)}%</td></tr>
-            <tr><td>Execution time:</td><td>${result.durationMs}ms</td></tr>
-          </table>
+          <div class="modal-stats">
+            <div class="modal-stat"><div class="stat-value">${result.totalBefore}</div><div class="stat-label">Rows before</div></div>
+            <div class="modal-stat"><div class="stat-value">${result.totalRemoved}</div><div class="stat-label">Removed</div></div>
+            <div class="modal-stat"><div class="stat-value">${result.totalAfter}</div><div class="stat-label">Remaining</div></div>
+            <div class="modal-stat"><div class="stat-value">${Number(result.percentageRemoved || 0).toFixed(1)}%</div><div class="stat-label">Removed %</div>
+            <div class="modal-stat"><div class="stat-value">${result.durationMs}ms</div><div class="stat-label">Took</div></div>
+          </div>
           <div class="modal-footer">
             <button class="btn btn-primary" onclick="document.getElementById('downsampleResultModal').remove()">Close</button>
           </div>
@@ -2476,13 +2476,13 @@
       modal.innerHTML = `
         <div class="modal-card">
           <h3>✅ Pruning Complete</h3>
-          <table class="prune-stats-table">
-            <tr><td>Total rows before:</td><td>${result.totalBefore}</td></tr>
-            <tr><td>Rows pruned:</td><td>${result.totalPruned}</td></tr>
-            <tr><td>Rows remaining:</td><td>${result.totalAfter}</td></tr>
-            <tr><td>Percentage removed:</td><td>${Number(result.percentageRemoved || 0).toFixed(1)}%</td></tr>
-            <tr><td>Execution time:</td><td>${result.durationMs}ms</td></tr>
-          </table>
+          <div class="modal-stats">
+            <div class="modal-stat"><div class="stat-value">${result.totalBefore}</div><div class="stat-label">Rows before</div></div>
+            <div class="modal-stat"><div class="stat-value">${result.totalPruned}</div><div class="stat-label">Pruned</div></div>
+            <div class="modal-stat"><div class="stat-value">${result.totalAfter}</div><div class="stat-label">Remaining</div></div>
+            <div class="modal-stat"><div class="stat-value">${Number(result.percentageRemoved || 0).toFixed(1)}%</div><div class="stat-label">Removed %</div>
+            <div class="modal-stat"><div class="stat-value">${result.durationMs}ms</div><div class="stat-label">Took</div></div>
+          </div>
           <div class="modal-footer">
             <button class="btn btn-primary" onclick="document.getElementById('pruneResultModal').remove()">Close</button>
           </div>
