@@ -58,7 +58,21 @@ into Node and assert full core coverage, rim coverage, and layout variety
 across 200 seeds. Add a debug toggle (puff outlines) for eyeball checks.
 Syntax-check inline scripts with `node --check` after every edit.
 
+## Daylight model (Sibiu seasonal blend)
+
+Three art-directed stops (day/dusk/night) blended continuously, not
+switched: `dayBlendForDate()` returns `{day, dusk}` and the frame eases
+toward it, so slider drags and clock ticks morph smoothly. Sunrise and
+sunset come from fixed base hours plus a sinusoidal seasonal shift tuned
+for Sibiu, Romania (45.8N): `rise = 06:52 - 78min*cos(w)`,
+`set = 18:48 + 132min*cos(w)`, `w = 2pi*(doy-172)/365`. Accurate within
+~20 min; dawn/dusk windows are 60-75 min wide so errors only shift the
+mood. Dawn reuses the dusk palette. Product seam: replace the internals
+of `dayBlendForDate` with the sunrise equation once real lat/lon exists;
+rendering stays untouched. Anchors verified in Node (solstices/equinox
+within 25 min, monotonic dawn ramp).
+
 ## Deferred, not rejected
 
-Day/dusk/night palettes driven by local time. A pixelated variant was
-built (`campsite-pixel-poc.html`) and removed — the smooth look won.
+A pixelated variant was built (`campsite-pixel-poc.html`) and removed —
+the smooth look won.
