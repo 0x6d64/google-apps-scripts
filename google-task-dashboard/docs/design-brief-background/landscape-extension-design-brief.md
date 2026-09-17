@@ -218,9 +218,12 @@ SNOW_LINE: 0.70, CLOUD_CAP: 25
 ## 10. Success criteria
 
 - [x] Landscape visible without harming readability.
-- [x] Metric computation correct and immutable across reloads.
-- [x] Smooth transitions on range change (0.75s morph, no snapping).
+- [x] Metric computation correct and immutable across reloads (Node suite:
+  stability, crisis/calm separation, range validity).
+- [x] Smooth transitions on range change (0.75s morph at 30fps, no snapping).
 - [x] Cabin, fire, trees visually cohesive.
+- [x] Cloud layouts gap-free and varied (Node suite: 100 seeds, core + rim).
+- [x] Daylight blend anchors match Sibiu sun times ±25 min (Node suite).
 - [ ] WCAG 2.0 AA contrast verified over live landscape.
 - [ ] Mobile usability verified (≤640px).
 - [ ] No jank during transitions (spot-check Performance panel).
