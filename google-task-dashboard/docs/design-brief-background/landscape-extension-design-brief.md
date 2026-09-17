@@ -21,11 +21,14 @@ files).
 ### 1.1 Canvas layer
 
 - **Position**: Fixed, full-screen, `z-index: -1` (behind all content).
-- **Resolution**: Device pixel ratio scaling, capped at 2.
-- **Render loop** (two modes): full-rate `requestAnimationFrame` while a
-  transition is in flight; slow ambient tick (~4fps) otherwise, skipped
-  when the tab is hidden. The scene is near-static (cloud bob ±3–6px),
-  so 60fps outside transitions is waste.
+- **Resolution**: Device pixel ratio scaling, capped at 2 (1.5 below
+  768px width for fill-rate savings).
+- **Render loop** (on-demand, resource-capped): full-rate
+  `requestAnimationFrame` capped at 30fps while a transition is in
+  flight; otherwise single frames painted only on data load, range
+  change, or resize — zero idle cost. `prefers-reduced-motion` snaps
+  transitions and paints once. Rationale: visual sugar must never tax
+  the device; the 0.75s morph is indistinguishable at 30fps.
 - **Content**: Sky, 3 nested mountain ranges, ground, treeline + pines,
   cabin, campfire, timeline clouds, sun, moon, stars.
 
@@ -192,13 +195,14 @@ reflows the same composition instead of stretching it.
 Port checklist from the POC: precompute the metric series once per data
 load, render per-row `weatherAt(ownMetric)`, port draw functions
 1:1 (ranges, treeline, pines, cabin, fire, clouds, sun/moon/stars),
-reuse the two-mode loop. Reference: `campsite-poc.html`.
+reuse the on-demand loop. Reference: `campsite-poc.html`.
 
 ## 9. Tuning constants
 
 ```javascript
 BASELINE_WINDOW_DAYS: 14, METRIC_DISPLAY_WINDOW_DAYS: 30,
-TRANSITION_DURATION_S: 0.75, AMBIENT_INTERVAL_MS: 250,
+TRANSITION_DURATION_S: 0.75, TRANSITION_FPS: 30,
+MOBILE_WIDTH: 768, MOBILE_DPR: 1.5, DESKTOP_DPR: 2,
 HOUSE_POSITION: { x: 0.16 }, HOUSE_WIDTH: 100, HOUSE_HEIGHT: 120,
 FIRE_POSITION: { x: 0.30 }, FIRE_SCALE: 0.8,
 SAFE_ZONES: [{ x: 0.16, r: 0.10 }, { x: 0.30, r: 0.08 }],

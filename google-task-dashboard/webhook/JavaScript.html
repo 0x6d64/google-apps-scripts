@@ -42,7 +42,19 @@
     const LANDSCAPE_TREND_CENTER = 0.85;
     const LANDSCAPE_TREND_SCALE = 0.3;
     const LANDSCAPE_MAX_FRAME_DT = 0.05;
-    const LANDSCAPE_AMBIENT_INTERVAL_MS = 250; // 4fps ambient tick when idle
+    const LANDSCAPE_TRANSITION_FPS = 30; // cap during morphs; idle costs nothing (on-demand rendering)
+    const LANDSCAPE_FRAME_MIN_MS = 1000 / LANDSCAPE_TRANSITION_FPS;
+    const LANDSCAPE_MOBILE_WIDTH = 768; // below this, DPR is capped for fill-rate savings
+    const LANDSCAPE_MOBILE_DPR = 1.5;
+    const LANDSCAPE_DESKTOP_DPR = 2;
+    const LANDSCAPE_SNOW_LINE = 0.70; // ridge peaks above this get snow caps
+    const LANDSCAPE_GROUND_TOP = 0.78;
+    const LANDSCAPE_CABIN = { x: 0.16, w: 110, h: 128 };
+    const LANDSCAPE_FIRE = { x: 0.30, s: 0.8 };
+    const LANDSCAPE_SAFE_ZONES = [
+      { x: LANDSCAPE_CABIN.x, r: 0.10 },
+      { x: LANDSCAPE_FIRE.x, r: 0.08 }
+    ];
     // Band midpoints of the weather states above. Cloud appearance
     // interpolates continuously between stops so range changes morph
     // instead of snapping at threshold boundaries (design brief §3.1).
@@ -87,12 +99,15 @@
       let foregroundCanvas, foregroundCtx;
       let dpr = 1;
       let W = 0, H = 0;
-      let treeSeed = [];
+      let houseChimney = null; // normalized chimney tip, stored for the smoke pass (stage 4)
       let grainTile = null;
       let lastFrameTs = null;
+      let lastPaintTs = 0;
       let started = false;
       let rafRunning = false;
-      let ambientTimer = null;
+
+      const REDUCED_MOTION = !!(window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
       const state = {
         currentMetric: LANDSCAPE_METRIC_NEUTRAL,
@@ -165,7 +180,13 @@
         if (Math.abs(state.targetMetric - metric) > 0.005) {
           state.startMetric = state.currentMetric;  // capture where we are NOW
           state.targetMetric = metric;
-          state.transitionProgress = 0.0;
+          if (REDUCED_MOTION) {
+            // No animation: snap and paint a single frame.
+            state.currentMetric = metric;
+            state.transitionProgress = 1.0;
+          } else {
+            state.transitionProgress = 0.0;
+          }
           kickTransitionLoop();
         }
       }
@@ -187,14 +208,13 @@
         if (!canvas) return;
         W = window.innerWidth;
         H = window.innerHeight;
-        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const dprCap = W < LANDSCAPE_MOBILE_WIDTH ? LANDSCAPE_MOBILE_DPR : LANDSCAPE_DESKTOP_DPR;
+        dpr = Math.min(window.devicePixelRatio || 1, dprCap);
 
         canvas.width = W * dpr;
         canvas.height = H * dpr;
         canvas.style.width = W + 'px';
         canvas.style.height = H + 'px';
-
-        treeSeed = [];
 
         drawBackdrop();
         drawForeground();
@@ -216,6 +236,74 @@
         return grainTile;
       }
 
+      // Three sine-composed ranges, far (pale) to near (dark). Polylines
+      // nest: no range dips below the silhouette in front, near range never
+      // below the horizon.
+      const RANGES = [
+        { base: 0.55, amp: 0.13, f1: 2.1, f2: 5.3, p1: 0.7, p2: 2.9, color: '#b9cfc9' },
+        { base: 0.64, amp: 0.12, f1: 2.8, f2: 6.7, p1: 2.1, p2: 0.4, color: '#8fb3a6' },
+        { base: 0.72, amp: 0.10, f1: 3.6, f2: 8.9, p1: 4.2, p2: 1.3, color: '#5f8272' }
+      ];
+      function ridgeY(r, x) {
+        const t = x / W;
+        return (r.base - r.amp * (0.62 * Math.sin(t * Math.PI * 2 * r.f1 + r.p1) +
+                                 0.38 * Math.sin(t * Math.PI * 2 * r.f2 + r.p2))) * H;
+      }
+      function rangePoly(r) {
+        const pts = [];
+        for (let x = 0; x <= W; x += 8) pts.push([x, ridgeY(r, x)]);
+        return pts;
+      }
+      function drawPoly(c, pts, color) {
+        c.fillStyle = color;
+        c.beginPath();
+        c.moveTo(0, H);
+        for (const [x, y] of pts) c.lineTo(x, y);
+        c.lineTo(W, H);
+        c.closePath();
+        c.fill();
+      }
+      // Snowcaps with mass: filled caps whose depth scales with peak height.
+      function drawSnowcaps(c, pts) {
+        const SNOW_Y = H * 0.47;
+        const segs = [];
+        let cur = null;
+        for (const [x, y] of pts) {
+          if (y < SNOW_Y) {
+            if (!cur) cur = [];
+            cur.push([x, y]);
+          } else if (cur) { segs.push(cur); cur = null; }
+        }
+        if (cur) segs.push(cur);
+        c.fillStyle = 'rgba(244,248,250,0.92)';
+        for (const seg of segs) {
+          if (seg.length < 2) continue;
+          c.beginPath();
+          c.moveTo(seg[0][0], seg[0][1]);
+          for (const [x, y] of seg) c.lineTo(x, y);
+          for (let i = seg.length - 1; i >= 0; i--) {
+            const [x, y] = seg[i];
+            c.lineTo(x, y + clamp((SNOW_Y - y) * 1.8, 5, 30));
+          }
+          c.closePath();
+          c.fill();
+        }
+        c.strokeStyle = 'rgba(255,255,255,0.9)';
+        c.lineWidth = 3;
+        c.lineCap = 'round';
+        c.lineJoin = 'round';
+        c.beginPath();
+        let pen = false;
+        for (const [x, y] of pts) {
+          if (y < SNOW_Y) {
+            if (!pen) { c.moveTo(x, y); pen = true; }
+            else c.lineTo(x, y);
+          } else {
+            pen = false;
+          }
+        }
+        c.stroke();
+      }
       function drawBackdrop() {
         backdropCanvas.width = W * dpr;
         backdropCanvas.height = H * dpr;
@@ -228,6 +316,22 @@
         sky.addColorStop(1, '#e4ecec');
         backdropCtx.fillStyle = sky;
         backdropCtx.fillRect(0, 0, W, H);
+
+        const groundY = LANDSCAPE_GROUND_TOP * H;
+        const polys = RANGES.map(rangePoly);
+        // Near range never dips below the horizon.
+        for (const p of polys[2]) p[1] = Math.min(p[1], groundY - 2);
+        // Back ranges never dip below the silhouette in front of them.
+        for (let i = 1; i >= 0; i--) {
+          const front = polys[i + 1];
+          for (let k = 0; k < polys[i].length; k++) {
+            polys[i][k][1] = Math.min(polys[i][k][1], front[k][1] + 4);
+          }
+        }
+        drawPoly(backdropCtx, polys[0], RANGES[0].color);
+        drawSnowcaps(backdropCtx, polys[0]);
+        drawPoly(backdropCtx, polys[1], RANGES[1].color);
+        drawPoly(backdropCtx, polys[2], RANGES[2].color);
 
         // Vignette to focus the centered content.
         const vig = backdropCtx.createRadialGradient(
@@ -247,8 +351,40 @@
         backdropCtx.restore();
       }
 
-      function drawTree(c, x, y, h, color) {
+      // Irregular conifer-silhouette rows (varied heights/widths/spacing)
+      // instead of a regular zigzag, plus a solid skirt so no sky can
+      // peek through at the horizon.
+      function coniferRow(c, baseY, color, seedOff, hMin, hMax) {
         c.fillStyle = color;
+        c.beginPath();
+        c.moveTo(-4, baseY + 60);
+        c.lineTo(-4, baseY);
+        let x = 0, k = 0;
+        while (x < W + 20) {
+          const h = hMin + pseudoRandom(k * 1.93 + seedOff) * (hMax - hMin);
+          const w = 9 + pseudoRandom(k * 3.11 + seedOff) * 11;
+          const cx = x + w / 2;
+          const jy = (pseudoRandom(k * 7.7 + seedOff) - 0.5) * 8;
+          c.lineTo(cx - w * 0.42, baseY + jy * 0.3);
+          c.lineTo(cx, baseY - h + jy);
+          c.lineTo(cx + w * 0.42, baseY + jy * 0.3);
+          x += w * (0.55 + pseudoRandom(k * 5.23 + seedOff) * 0.5);
+          k++;
+        }
+        c.lineTo(W + 4, baseY + 60);
+        c.closePath();
+        c.fill();
+      }
+      function drawTreeline(c) {
+        const y0 = RANGES[2].base * H + 6;
+        coniferRow(c, y0 + 12, '#3d5f4e', 7.7, 22, 52); // back row, darker
+        coniferRow(c, y0 + 28, '#476b58', 3.1, 14, 36); // front row
+        c.fillStyle = '#476b58';
+        c.fillRect(0, y0 + 28, W, H);
+      }
+
+      function drawTree(c, x, y, h, dark) {
+        c.fillStyle = dark ? '#2f4a30' : '#3f5f3a';
         const w = h * 0.55;
         c.beginPath();
         c.moveTo(x, y - h);
@@ -264,32 +400,105 @@
         c.lineTo(x + w * 0.5, y - h * 0.35);
         c.closePath();
         c.fill();
+        // Sun-side highlight sliver.
+        c.fillStyle = dark ? 'rgba(120,150,110,0.5)' : 'rgba(150,180,135,0.55)';
+        c.beginPath();
+        c.moveTo(x, y - h);
+        c.lineTo(x + w * 0.5, y - h * 0.35);
+        c.lineTo(x + w * 0.32, y - h * 0.35);
+        c.lineTo(x + w * 0.12, y - h * 0.62);
+        c.closePath();
+        c.fill();
         c.fillStyle = 'rgba(0,0,0,.18)';
         c.fillRect(x - 3, y + h * 0.42, 6, h * 0.12);
       }
 
       function drawHouse(c, x, y, w, h) {
+        c.fillStyle = 'rgba(0,0,0,0.15)';
+        c.beginPath(); c.ellipse(x, y + 6, w * 0.75, 10, 0, 0, Math.PI * 2); c.fill();
         c.fillStyle = '#5a7a6e';
         c.fillRect(x - w / 2, y - h * 0.55, w, h * 0.55);
-
+        // Log lines.
+        c.strokeStyle = 'rgba(0,0,0,0.12)';
+        c.lineWidth = 1.5;
+        for (let i = 1; i < 5; i++) {
+          const ly = y - h * 0.55 + (h * 0.55 * i) / 5;
+          c.beginPath(); c.moveTo(x - w / 2, ly); c.lineTo(x + w / 2, ly); c.stroke();
+        }
+        // Roof with overhang + ridge shadow.
         c.fillStyle = '#8b6f47';
         c.beginPath();
-        c.moveTo(x - w / 2, y - h * 0.55);
-        c.lineTo(x, y - h);
-        c.lineTo(x + w / 2, y - h * 0.55);
-        c.closePath();
-        c.fill();
-
+        c.moveTo(x - w / 2 - 10, y - h * 0.55);
+        c.lineTo(x, y - h * 1.02);
+        c.lineTo(x + w / 2 + 10, y - h * 0.55);
+        c.closePath(); c.fill();
+        c.fillStyle = 'rgba(0,0,0,0.18)';
+        c.beginPath();
+        c.moveTo(x, y - h * 1.02);
+        c.lineTo(x + w / 2 + 10, y - h * 0.55);
+        c.lineTo(x + w / 2 - 12, y - h * 0.55);
+        c.lineTo(x, y - h * 0.86);
+        c.closePath(); c.fill();
+        // Door + warm windows.
         c.fillStyle = '#3d4a47';
-        c.fillRect(x - 15, y - 40, 30, 40);
+        c.fillRect(x - 15, y - 42, 30, 42);
+        c.fillStyle = '#ffd97a';
+        c.fillRect(x - w / 2 + 16, y - h * 0.36, 22, 22);
+        c.fillRect(x + w / 2 - 38, y - h * 0.36, 22, 22);
+        c.fillStyle = 'rgba(255,217,122,0.35)';
+        c.fillRect(x - w / 2 + 12, y - h * 0.36 - 4, 30, 30);
+        c.fillRect(x + w / 2 - 42, y - h * 0.36 - 4, 30, 30);
+        // Stone chimney; tip stored normalized for the smoke pass (stage 4).
+        c.fillStyle = '#6e6a63';
+        c.fillRect(x + w * 0.20, y - h * 1.06, 16, h * 0.42);
+        houseChimney = {
+          nx: (x + w * 0.20 + 8) / W, ny: (y - h * 1.06) / H,
+          windows: [
+            { x: x - w / 2 + 16, y: y - h * 0.36, w: 22, h: 22 },
+            { x: x + w / 2 - 38, y: y - h * 0.36, w: 22, h: 22 }
+          ]
+        };
+      }
 
-        c.fillStyle = '#c9e4e0';
-        c.fillRect(x - w / 2 + 18, y - h * 0.35, 20, 20);
-        c.fillRect(x + w / 2 - 38, y - h * 0.35, 20, 20);
+      // Campfire static base: stone ring + crossed logs (flames arrive in stage 4).
+      function drawFireBase(c, x, y) {
+        c.fillStyle = 'rgba(0,0,0,0.18)';
+        c.beginPath(); c.ellipse(x, y + 8, 64, 12, 0, 0, Math.PI * 2); c.fill();
+        for (let i = 0; i < 9; i++) {
+          const a = (i / 9) * Math.PI * 2;
+          c.fillStyle = i % 2 ? '#8a8d90' : '#75787c';
+          c.beginPath();
+          c.ellipse(x + Math.cos(a) * 52, y + 4 + Math.sin(a) * 12, 11, 8, 0, 0, Math.PI * 2);
+          c.fill();
+        }
+        const logs = [[-32, -6, 30, 6], [30, -4, -30, 8], [0, -12, 4, 10]];
+        c.lineCap = 'round';
+        c.strokeStyle = '#5a4028';
+        c.lineWidth = 11;
+        for (const [x1, y1, x2, y2] of logs) {
+          c.beginPath(); c.moveTo(x + x1, y + y1); c.lineTo(x + x2, y + y2); c.stroke();
+        }
+        c.strokeStyle = '#7a5a38';
+        c.lineWidth = 4;
+        for (const [x1, y1, x2, y2] of logs) {
+          c.beginPath(); c.moveTo(x + x1, y + y1 - 2); c.lineTo(x + x2, y + y2 - 2); c.stroke();
+        }
+        c.lineCap = 'butt';
+      }
 
-        c.strokeStyle = 'rgba(0,0,0,.15)';
-        c.lineWidth = 2;
-        c.strokeRect(x - w / 2, y - h * 0.55, w, h * 0.55);
+      // Rejection sampling: no two trunks closer than ~0.055, so canopies
+      // cannot merge into one blob. Deterministic: stable across resizes.
+      const PINES = [];
+      {
+        let guard = 0;
+        while (PINES.length < 17 && guard++ < 500) {
+          const x = pseudoRandom(guard * 1.71 + 0.13);
+          if (PINES.some((p) => Math.abs(p.x - x) < 0.055)) continue;
+          PINES.push({ x: x, s: 0.8 + pseudoRandom(guard * 3.3) * 1.0, dark: pseudoRandom(guard * 7.9) > 0.5 });
+        }
+      }
+      function inSafeZone(nx) {
+        return LANDSCAPE_SAFE_ZONES.some((z) => Math.abs(nx - z.x) < z.r);
       }
 
       function drawForeground() {
@@ -300,33 +509,29 @@
         foregroundCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         foregroundCtx.clearRect(0, 0, W, H);
 
-        const groundTop = H * 0.78;
+        const groundTop = H * LANDSCAPE_GROUND_TOP;
         const ground = foregroundCtx.createLinearGradient(0, groundTop, 0, H);
         ground.addColorStop(0, '#446354');
         ground.addColorStop(1, '#2c4326');
         foregroundCtx.fillStyle = ground;
         foregroundCtx.fillRect(0, groundTop, W, H - groundTop);
 
-        if (treeSeed.length === 0) {
-          const count = Math.max(6, Math.floor(W / 140));
-          for (let i = 0; i < count; i++) {
-            treeSeed.push({
-              x: Math.random(),
-              scale: 0.55 + Math.random() * 0.6,
-              dark: Math.random() > 0.5
-            });
-          }
-        }
-        for (let t = 0; t < treeSeed.length; t++) {
-          const ts = treeSeed[t];
-          // leave a gap around the house at 50% for visual clarity
-          if (ts.x > 0.10 && ts.x < 0.26) continue;
-          const tx = ts.x * W;
-          const ty = groundTop + 6;
-          drawTree(foregroundCtx, tx, ty, 46 * ts.scale, ts.dark ? '#2f4a30' : '#3f5f3a');
+        drawTreeline(foregroundCtx);
+
+        for (const p of PINES) {
+          if (inSafeZone(p.x)) continue; // keep cabin + campfire clearing open
+          drawTree(foregroundCtx, p.x * W, groundTop + 8, 64 * p.s, p.dark);
         }
 
-        drawHouse(foregroundCtx, W * 0.18, groundTop + 6, 100, 120);
+        drawHouse(foregroundCtx, LANDSCAPE_CABIN.x * W, groundTop + 8,
+          LANDSCAPE_CABIN.w, LANDSCAPE_CABIN.h);
+
+        // Campfire static base, scaled to stay subordinate.
+        foregroundCtx.save();
+        foregroundCtx.translate(LANDSCAPE_FIRE.x * W, groundTop + 26);
+        foregroundCtx.scale(LANDSCAPE_FIRE.s, LANDSCAPE_FIRE.s);
+        drawFireBase(foregroundCtx, 0, 0);
+        foregroundCtx.restore();
       }
 
       function getCloudPosition(snapshotTimestamp, now) {
@@ -449,37 +654,34 @@
         lastFrameTs = ts;
 
         updateTransition(dt);
-        render(ts / 1000);
+        // Transitions run capped at 30fps: plenty for a 0.75s color morph.
+        if (ts - lastPaintTs >= LANDSCAPE_FRAME_MIN_MS) {
+          lastPaintTs = ts;
+          render(ts / 1000);
+        }
 
         if (state.transitionProgress < 1.0) {
           requestAnimationFrame(frame);
         } else {
           rafRunning = false;
-          startAmbient();
+          render(ts / 1000); // exact final state, even if throttled
         }
-      }
-
-      /**
-       * Slow ambient repaint for the near-static scene (cloud bob and drift).
-       * Full-rate rAF runs only while a transition is in flight.
-       */
-      function startAmbient() {
-        if (ambientTimer) return;
-        ambientTimer = setInterval(() => {
-          if (document.hidden || state.transitionProgress < 1.0) return;
-          render(Date.now() / 1000);
-        }, LANDSCAPE_AMBIENT_INTERVAL_MS);
       }
 
       /**
        * Hands rendering back to full-rate rAF for a transition.
        */
       function kickTransitionLoop() {
-        if (ambientTimer) {
-          clearInterval(ambientTimer);
-          ambientTimer = null;
-        }
         if (!rafRunning) requestAnimationFrame(frame);
+      }
+
+      /**
+       * Paints a single frame on demand (data load, range change, resize).
+       * Idle costs nothing: with no transition running this renders once
+       * and stops instead of looping.
+       */
+      function requestRender() {
+        kickTransitionLoop();
       }
 
       function init() {
@@ -498,14 +700,14 @@
         if (!started) {
           started = true;
           render(Date.now() / 1000);
-          startAmbient();
         }
       }
 
       return {
         init: init,
         setTargetMetric: setTargetMetric,
-        setActiveRangeDays: setActiveRangeDays
+        setActiveRangeDays: setActiveRangeDays,
+        requestRender: requestRender
       };
     })();
 
@@ -862,6 +1064,7 @@
 
       Landscape.setActiveRangeDays(activeRangeDays);
       Landscape.setTargetMetric(calculateMetricForRange(rawData.rows, activeRangeDays === 'all' ? LANDSCAPE_ALL_RANGE_WINDOW_DAYS : activeRangeDays));
+      Landscape.requestRender(); // repaint for new data even without a transition
     }
 
     /**
@@ -1694,6 +1897,7 @@
         const effectiveRangeDays = (activeRangeDays === 'all') ? LANDSCAPE_ALL_RANGE_WINDOW_DAYS : activeRangeDays;
         Landscape.setActiveRangeDays(activeRangeDays);
         Landscape.setTargetMetric(calculateMetricForRange(rawData.rows, effectiveRangeDays));
+        Landscape.requestRender(); // repaint for new window even without a transition
       }
 
       renderCharts();
