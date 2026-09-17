@@ -282,6 +282,12 @@ All text over transparent backgrounds **must** maintain a contrast ratio of at l
 
 **Recommendation**: Start with **option 2** (adaptive opacity). Test with users; if landscape becomes invisible, shift to option 1.
 
+Proven in `campsite-poc.html`: map the canvas 1:1 to the viewport and
+keep every layout position fractional with deterministic seeds, so
+resizing reflows the same composition instead of stretching it. Keep
+critical scenery (cabin, fire) positioned relative to the live viewport
+size rather than cropped by a fixed design space.
+
 ### 7.2 Implementation
 
 ```css

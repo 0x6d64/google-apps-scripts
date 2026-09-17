@@ -61,16 +61,45 @@ Syntax-check inline scripts with `node --check` after every edit.
 ## Daylight model (Sibiu seasonal blend)
 
 Three art-directed stops (day/dusk/night) blended continuously, not
-switched: `dayBlendForDate()` returns `{day, dusk}` and the frame eases
-toward it, so slider drags and clock ticks morph smoothly. Sunrise and
-sunset come from fixed base hours plus a sinusoidal seasonal shift tuned
-for Sibiu, Romania (45.8N): `rise = 06:52 - 78min*cos(w)`,
+switched: `dayBlendForDate()` returns `{day, dusk, h, rise, set}` and the
+frame eases toward it, so slider drags and clock ticks morph smoothly.
+Sunrise and sunset come from fixed base hours plus a sinusoidal seasonal
+shift tuned for Sibiu, Romania (45.8N): `rise = 06:52 - 78min*cos(w)`,
 `set = 18:48 + 132min*cos(w)`, `w = 2pi*(doy-172)/365`. Accurate within
 ~20 min; dawn/dusk windows are 60-75 min wide so errors only shift the
 mood. Dawn reuses the dusk palette. Product seam: replace the internals
 of `dayBlendForDate` with the sunrise equation once real lat/lon exists;
 rendering stays untouched. Anchors verified in Node (solstices/equinox
 within 25 min, monotonic dawn ramp).
+
+## Dusk foreground rules
+
+The sky may glow, but the foreground must go dark: strongest value
+contrast lives in the foreground, with the darkest darks there
+(atmospheric-perspective basics). Implementation: a bottom-up silhouette
+grade (transparent at the horizon, dark at the frame bottom, scaled by
+night factor), warm rim light on sun-facing edges (pine slivers, cabin
+roof ridge) driven by the dusk factor, and long soft shadows stretching
+away from the low sun (length peaks morning/evening, vanishes at noon).
+Shadows stay colored (`rgba(20,26,40)`), never black. The sun travels
+east-to-west and sits near the horizon at rise/set; the moon has its own
+slot so the two never overlap. Foreground pines use min-spacing rejection
+sampling so canopies cannot merge.
+
+## Resize reflows, never stretches
+
+No cover-fit: the canvas maps 1:1 to the viewport and every layout
+position is fractional with deterministic seeds, so resizing re-runs the
+same composition at the new size. Nothing reshuffles (pines, ridges, and
+clouds are pure functions of stable seeds), and the cabin/campfire keep
+their relative placement by construction. Chosen over cover-fit so the
+house can be placed correctly for the actual viewport instead of being
+cropped away on narrow screens.
+
+## Simulation controls defer to the user
+
+Dragging the time slider unchecks auto mode. Manual override always wins
+over automation; re-checking auto resumes the live clock.
 
 ## Deferred, not rejected
 

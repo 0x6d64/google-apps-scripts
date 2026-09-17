@@ -39,15 +39,20 @@
   const fpsEl = document.getElementById('fps');
   let W = 0, H = 0, DPR = 1;
 
+  // Direct mapping: layout reflows on every resize (all positions are
+  // fractional, all seeds deterministic), so the cabin and campfire can
+  // be placed correctly for the actual viewport size.
   function resize() {
     W = window.innerWidth;
     H = window.innerHeight;
     DPR = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = W * DPR;
-    canvas.height = H * DPR;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   }
   window.addEventListener('resize', resize);
+  // Dragging the time slider takes over from auto mode.
+  timeSlider.addEventListener('input', () => { autoTimeBox.checked = false; });
   resize();
 
   // Deterministic hash for stable per-object variation.
@@ -84,7 +89,7 @@
       (1 - smoothstep(set - 0.5, set + 0.75, h));
     const nearest = Math.min(Math.abs(h - rise), Math.abs(h - set));
     const dusk = clamp(1 - nearest / 1.2, 0, 1);
-    return { day: day, dusk: dusk };
+    return { day: day, dusk: dusk, h: h, rise: rise, set: set };
   }
   const blend = { day: 1, dusk: 0 }; // smoothed each frame toward target
   function fmtTime(mins) {
@@ -103,9 +108,22 @@
   }
 
   const SUN = { x: 0.78, y: 0.20 };
-  function drawSun() {
-    const x = SUN.x * W, y = SUN.y * H;
+  const MOON = { x: 0.24, y: 0.16 };
+  const sunPos = { x: SUN.x, y: SUN.y }; // updated per frame from time of day
+  // Sun travels east->west and touches the horizon at rise/set.
+  // Returns day progress p (0 at sunrise, 1 at sunset) for shadow length.
+  function updateSunPos(h, rise, set) {
+    const p = clamp((h - rise) / Math.max(0.5, set - rise), 0, 1);
+    sunPos.x = 0.18 + 0.64 * p;
+    sunPos.y = 0.62 - Math.sin(Math.PI * p) * 0.49;
+    return p;
+  }
+  function drawSun(alpha) {
+    if (alpha < 0.02) return;
+    const x = sunPos.x * W, y = sunPos.y * H;
     const r = Math.min(W, H) * 0.05;
+    ctx.save();
+    ctx.globalAlpha = alpha;
     const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 3.4);
     glow.addColorStop(0, 'rgba(255,236,170,0.85)');
     glow.addColorStop(1, 'rgba(255,236,170,0)');
@@ -113,12 +131,14 @@
     ctx.beginPath(); ctx.arc(x, y, r * 3.4, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff3c4';
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
   }
 
-  // Night celestial disc (moon) + glow, alpha-driven. Shares the sun slot.
+  // Night celestial disc (moon) + glow, alpha-driven. Own slot, away
+  // from the sun path so the two never overlap.
   function drawMoon(alpha) {
     if (alpha < 0.02) return;
-    const x = SUN.x * W, y = SUN.y * H;
+    const x = MOON.x * W, y = MOON.y * H;
     const r = Math.min(W, H) * 0.038;
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -272,8 +292,15 @@
     ctx.fillRect(0, y0 + 28, W, H);
   }
 
-  function drawPine(x, y, h, dark) {
+  function drawPine(x, y, h, dark, shade, rim) {
     const w = h * 0.52;
+    // Long soft shadow away from a low sun (colored, never black).
+    if (shade && shade.alpha > 0.01) {
+      ctx.fillStyle = 'rgba(20,26,40,' + (0.20 * shade.alpha).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.ellipse(x + shade.dx * h, y + 6, h * 0.45, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.fillStyle = dark ? '#2e4a30' : '#3e5f3a';
     ctx.beginPath();
     ctx.moveTo(x, y - h);
@@ -298,18 +325,36 @@
     ctx.lineTo(x + w * 0.12, y - h * 0.62);
     ctx.closePath();
     ctx.fill();
+    // Warm rim on the sun-facing sliver at dusk.
+    if (rim > 0.02) {
+      ctx.fillStyle = 'rgba(255,170,90,' + (0.55 * rim).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.moveTo(x, y - h);
+      ctx.lineTo(x + w * 0.5, y - h * 0.35);
+      ctx.lineTo(x + w * 0.32, y - h * 0.35);
+      ctx.lineTo(x + w * 0.12, y - h * 0.62);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.fillStyle = '#4a3a28';
     ctx.fillRect(x - 3, y + h * 0.44, 6, h * 0.14);
   }
 
   const PINES = [];
-  for (let i = 0; i < 17; i++) {
-    PINES.push({ x: prand(i * 1.71), s: 0.8 + prand(i * 3.3) * 1.0, dark: prand(i * 7.9) > 0.5 });
+  {
+    // Rejection sampling: no two trunks closer than ~0.055, so canopies
+    // cannot merge into one blob.
+    let guard = 0;
+    while (PINES.length < 17 && guard++ < 500) {
+      const x = prand(guard * 1.71 + 0.13);
+      if (PINES.some((p) => Math.abs(p.x - x) < 0.055)) continue;
+      PINES.push({ x: x, s: 0.8 + prand(guard * 3.3) * 1.0, dark: prand(guard * 7.9) > 0.5 });
+    }
   }
-  function drawPines(groundTop) {
+  function drawPines(groundTop, shade, rim) {
     for (const p of PINES) {
       if (inSafeZone(p.x)) continue; // keep cabin + campfire clearing open
-      drawPine(p.x * W, groundTop + 8, 64 * p.s, p.dark);
+      drawPine(p.x * W, groundTop + 8, 64 * p.s, p.dark, shade, rim);
     }
   }
 
@@ -325,10 +370,16 @@
   function inSafeZone(nx) {
     return SAFE_ZONES.some((z) => Math.abs(nx - z.x) < z.r);
   }
-  function drawCabin(groundTop) {
+  function drawCabin(groundTop, shade, rim) {
     const x = CABIN.x * W, y = groundTop + 8, w = CABIN.w, h = CABIN.h;
     ctx.fillStyle = 'rgba(0,0,0,0.15)';
     ctx.beginPath(); ctx.ellipse(x, y + 6, w * 0.75, 10, 0, 0, Math.PI * 2); ctx.fill();
+    if (shade && shade.alpha > 0.01) {
+      ctx.fillStyle = 'rgba(20,26,40,' + (0.20 * shade.alpha).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.ellipse(x + shade.dx * h * 0.9, y + 6, w * 0.85, 11, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.fillStyle = '#5a7a6e';
     ctx.fillRect(x - w / 2, y - h * 0.55, w, h * 0.55);
     // Log lines.
@@ -352,6 +403,16 @@
     ctx.lineTo(x + w / 2 - 12, y - h * 0.55);
     ctx.lineTo(x, y - h * 0.86);
     ctx.closePath(); ctx.fill();
+    // Warm rim along the roof ridge at dusk.
+    if (rim > 0.02) {
+      ctx.strokeStyle = 'rgba(255,170,90,' + (0.5 * rim).toFixed(3) + ')';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x - w / 2 - 10, y - h * 0.55);
+      ctx.lineTo(x, y - h * 1.02);
+      ctx.lineTo(x + w / 2 + 10, y - h * 0.55);
+      ctx.stroke();
+    }
     // Door + warm windows.
     ctx.fillStyle = '#3d4a47';
     ctx.fillRect(x - 15, y - 42, 30, 42);
@@ -594,6 +655,14 @@
     blend.dusk += (target.dusk - blend.dusk) * bk;
     const nightF = 1 - blend.day;
 
+    // Sun path + low-sun shadow/rim factors for the foreground.
+    const prog = updateSunPos(target.h, target.rise, target.set);
+    const sunAlpha = clamp(blend.day + blend.dusk * 0.6, 0, 1);
+    const shadeA = clamp(1 - Math.sin(Math.PI * clamp(prog, 0, 1)), 0, 1) *
+      clamp(blend.day + blend.dusk, 0, 1);
+    const shade = { dx: (0.5 - prog) * 1.6, alpha: shadeA };
+    const rim = blend.dusk;
+
     drawSky();
 
     // Ground.
@@ -606,9 +675,9 @@
 
     drawRanges();
     drawTreeline();
-    drawSun();
-    drawPines(groundTop);
-    const cabinInfo = drawCabin(groundTop);
+    drawSun(sunAlpha);
+    drawPines(groundTop, shade, rim);
+    const cabinInfo = drawCabin(groundTop, shade, rim);
 
     // Clouds drift slowly; wrap with margin.
     for (const c of CLOUDS) {
@@ -626,6 +695,17 @@
     emitFire(0, -8, intensity, dt);
     stepSmoke(dt);
     ctx.restore();
+
+    // Foreground silhouette grade: ground and trees go darker while the
+    // sky stays bright (darkest values live in the foreground at dusk).
+    const gradeA = clamp((1 - blend.day) * 0.85, 0, 0.55);
+    if (gradeA > 0.01) {
+      const fg = ctx.createLinearGradient(0, groundTop - 40, 0, H);
+      fg.addColorStop(0, 'rgba(16,14,38,0)');
+      fg.addColorStop(1, 'rgba(16,14,38,' + gradeA.toFixed(3) + ')');
+      ctx.fillStyle = fg;
+      ctx.fillRect(0, groundTop - 40, W, H - groundTop + 40);
+    }
 
     // Daylight overlays.
     if (blend.dusk > 0.01) {
