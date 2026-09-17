@@ -173,33 +173,63 @@ All text over transparent backgrounds **must** maintain a contrast ratio of at l
 - Consider: subtle tint based on metric (slightly warmer when good, cooler when bad)? **TBD in visual iteration.**
 
 **Mountains** (static):
-- Back ridge: 66% down, height 16%, color #9fc0b8, opacity 0.85. Perlin-like ridgeline.
-- Front ridge: 72% down, height 13%, color #7fa39a, opacity 1.0. Perlin-like ridgeline.
+
+- Three sine-composed ranges, far (pale) to near (dark): atmospheric ramp.
+- Back `#b9cfc9`, mid `#8fb3a6`, near `#5f8272`.
+- Polylines must nest: no range may dip below the silhouette in front of
+  it, and the near range never dips below the horizon. Pale "bowls" under
+  dark edges are structurally impossible, not just unlikely.
+- Snowcaps on far-range peaks only: filled caps whose depth scales with
+  peak height (deep mid-peak, feathered edges) plus a thin top-edge
+  stroke. Proven in `campsite-poc.html`; details in `campsite-learnings.md`.
 
 **Ground** (static):
 - From 78% down to bottom. Gradient #446354 → #2c4326 (moss-to-dark-green).
 - Optional: subtle radial gradient or texture for visual interest. **TBD.**
 
 **Trees** (static):
-- Conifers scattered along horizon line (78% down).
-- Vary in scale (0.4–1.2x) and darkness (light vs. dark variants).
-- ~6–12 trees across the landscape.
+
+- Irregular conifer-silhouette rows (varied heights, widths, spacing,
+  vertical jitter), darker taller back row, lighter front row, plus a
+  solid skirt below so sky never peeks through at the horizon. Regular
+  zigzags and even scallops read as trim, not forest.
+- ~17 foreground pines, largest exceeding cabin wall height, two-tone
+  sun-side shading. No pines spawn inside the cabin/campfire safe zones.
 
 **House** (new, static):
+
+- **Position**: 16% across (left side), NOT 35%: the dashboard UI covers
+  the center, so centered scenery is wasted. Foreground, visible but not
+  dominant.
+- **Scale**: ~80–120px tall (large enough to notice, small enough not to dominate).
 - **Architecture**: Minimal, geometric. Frank Lloyd Wright cabin aesthetic.
   - Walls: simple rectangle, color #5a7a6e (muted moss-green with warmth).
   - Roof: triangle, color #8b6f47 (warm brown, aged timber).
   - Door: small rectangle, color #3d4a47 (dark).
   - Windows: optional small squares, color #c9e4e0 (light blue, "interior light").
-- **Position**: Approx. 35% across, 62% down (foreground, visible but not dominant).
-- **Scale**: ~80–120px tall (large enough to notice, small enough not to dominate).
 - **Shadow**: subtle drop shadow or outline to separate from mountains.
 
 **Clouds** (dynamic, per POC):
+
 - Right-to-left drift, continuous.
-- Color/opacity/size respond to weather state.
-- Spawn rate adjusts with metric (slower in clear weather, faster in stormy).
+- Seeded puff layouts (6–11 puffs, positions and aspect derived from the
+  seed — never a fixed stamp), over a base ellipse mass whose gradient
+  dissolves toward the bottom rim, plus low filler puffs straddling the
+  rim. Unions cannot gap; verified geometrically across 200 seeds.
+- Color/opacity/size respond to weather state; bottom shading gives volume.
 - Rain streaks rendered when weather state indicates rain.
+
+**Campfire** (new, dynamic):
+
+- Positioned next to the cabin (30% across), scaled to 80% so it stays
+  subordinate. Stone ring, crossed logs, three particle systems (additive
+  flames yellow-to-red, expanding smoke, fast sparks) plus a flickering
+  ground glow. One intensity parameter drives emission and glow.
+
+**Safe zones** (static):
+
+- Tree-free discs around the cabin (radius 0.10) and campfire (radius
+  0.08): realistic clearing, and prevents pine/fire sprite collisions.
 
 **Sun** (dynamic, per POC):
 - Fixed position (78% across, 20% down).
@@ -329,9 +359,12 @@ const LANDSCAPE = {
   CLOUD_DRIFT_PX_PER_SEC: 35,        // right-to-left movement
   LANDSCAPE_CANVAS_Z_INDEX: -1,
   
-  HOUSE_POSITION: { x: 0.35, y: 0.62 },
+  HOUSE_POSITION: { x: 0.16, y: 0.62 },
   HOUSE_WIDTH: 100,
   HOUSE_HEIGHT: 120,
+  FIRE_POSITION: { x: 0.30 },
+  FIRE_SCALE: 0.8,
+  SAFE_ZONES: [{ x: 0.16, r: 0.10 }, { x: 0.30, r: 0.08 }],
   
   GLASSMORPHISM: {
     panel_opacity: 0.84,
@@ -365,6 +398,11 @@ const LANDSCAPE = {
 5. **Daily cycle**: Should the sky simulate time-of-day (dawn/dusk coloring)? Or static?
 
 **Recommendation**: Start with static (current design). Test with users; add variations in Phase 3 if they enhance rather than distract.
+
+Daylight only for now. Day/dusk/night palettes driven by local time are
+deferred to a later version. A pixelated variant was prototyped and
+rejected in favor of the smooth look. See `campsite-poc.html` (reference
+implementation) and `campsite-learnings.md` (distilled lessons).
 
 ---
 

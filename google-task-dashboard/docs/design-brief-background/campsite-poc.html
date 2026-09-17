@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campsite POC — daylight</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9fc4cf; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #panel {
+    position: fixed; top: 12px; left: 12px; z-index: 10;
+    background: rgba(255,255,255,0.88); border-radius: 8px; padding: 10px 14px;
+    font: 13px/1.6 -apple-system, "Segoe UI", sans-serif; color: #202124;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  }
+  #panel label { display: block; }
+  #fps { font-variant-numeric: tabular-nums; font-weight: 600; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="panel">
+  <label>Fire intensity <input type="range" id="fire" min="0" max="100" value="55"></label>
+  <label><input type="checkbox" id="debug"> Puff outlines (cloud debug)</label>
+  <div>FPS: <span id="fps">-</span></div>
+</div>
+<script>
+(function () {
+  'use strict';
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const fireSlider = document.getElementById('fire');
+  const debugBox = document.getElementById('debug');
+  const fpsEl = document.getElementById('fps');
+  let W = 0, H = 0, DPR = 1;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Deterministic hash for stable per-object variation.
+  function prand(seed) {
+    const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+  function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+
+  // ---------------------------------------------------------------- sky/sun
+  function drawSky() {
+    const g = ctx.createLinearGradient(0, 0, 0, H * 0.78);
+    g.addColorStop(0, '#8fbcd0');
+    g.addColorStop(0.6, '#c3d9de');
+    g.addColorStop(1, '#e9efec');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  const SUN = { x: 0.78, y: 0.20 };
+  function drawSun() {
+    const x = SUN.x * W, y = SUN.y * H;
+    const r = Math.min(W, H) * 0.05;
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 3.4);
+    glow.addColorStop(0, 'rgba(255,236,170,0.85)');
+    glow.addColorStop(1, 'rgba(255,236,170,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(x, y, r * 3.4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff3c4';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // --------------------------------------------------------------- mountains
+  // Three sine-composed ranges, far (pale) -> near (dark): atmospheric ramp.
+  // Polylines nest: no range may dip below the silhouette in front of it,
+  // so pale "bowls" can never show through under a dark edge.
+  const RANGES = [
+    { base: 0.55, amp: 0.13, f1: 2.1, f2: 5.3, p1: 0.7, p2: 2.9, color: '#b9cfc9' },
+    { base: 0.64, amp: 0.12, f1: 2.8, f2: 6.7, p1: 2.1, p2: 0.4, color: '#8fb3a6' },
+    { base: 0.72, amp: 0.10, f1: 3.6, f2: 8.9, p1: 4.2, p2: 1.3, color: '#5f8272' }
+  ];
+  const GROUND_TOP = 0.78;
+  function ridgeY(r, x) {
+    const t = x / W;
+    return (r.base - r.amp * (0.62 * Math.sin(t * Math.PI * 2 * r.f1 + r.p1) +
+                             0.38 * Math.sin(t * Math.PI * 2 * r.f2 + r.p2))) * H;
+  }
+  function rangePoly(r) {
+    const pts = [];
+    for (let x = 0; x <= W; x += 8) pts.push([x, ridgeY(r, x)]);
+    return pts;
+  }
+  function drawPoly(pts, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (const [x, y] of pts) ctx.lineTo(x, y);
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+  function drawRanges() {
+    const groundY = GROUND_TOP * H;
+    const polys = RANGES.map(rangePoly);
+    // Near range never dips below the horizon.
+    for (const p of polys[2]) p[1] = Math.min(p[1], groundY - 2);
+    // Back ranges never dip below the silhouette in front of them.
+    for (let i = 1; i >= 0; i--) {
+      const front = polys[i + 1];
+      for (let k = 0; k < polys[i].length; k++) {
+        polys[i][k][1] = Math.min(polys[i][k][1], front[k][1] + 4);
+      }
+    }
+    drawPoly(polys[0], RANGES[0].color);
+    // Snowcaps with mass: filled caps whose depth follows peak height,
+    // deepest in the middle of the peak, feathering out at the edges.
+    const SNOW_Y = H * 0.47;
+    const segs = [];
+    let cur = null;
+    for (const [x, y] of polys[0]) {
+      if (y < SNOW_Y) {
+        if (!cur) cur = [];
+        cur.push([x, y]);
+      } else if (cur) { segs.push(cur); cur = null; }
+    }
+    if (cur) segs.push(cur);
+    ctx.fillStyle = 'rgba(244,248,250,0.92)';
+    for (const seg of segs) {
+      if (seg.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(seg[0][0], seg[0][1]);
+      for (const [x, y] of seg) ctx.lineTo(x, y);
+      for (let i = seg.length - 1; i >= 0; i--) {
+        const [x, y] = seg[i];
+        ctx.lineTo(x, y + clamp((SNOW_Y - y) * 1.8, 5, 30));
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Crisp top edge along the same peak segments.
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let pen = false;
+    for (const [x, y] of polys[0]) {
+      if (y < SNOW_Y) {
+        if (!pen) { ctx.moveTo(x, y); pen = true; }
+        else ctx.lineTo(x, y);
+      } else {
+        pen = false;
+      }
+    }
+    ctx.stroke();
+    drawPoly(polys[1], RANGES[1].color);
+    drawPoly(polys[2], RANGES[2].color);
+  }
+
+  // ------------------------------------------------------- treeline + pines
+  // Irregular conifer-silhouette rows (varied heights/widths/spacing)
+  // instead of a regular scallop edge, plus a solid skirt so no sky
+  // can peek through at the horizon.
+  function coniferRow(baseY, color, seedOff, hMin, hMax) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-4, baseY + 60);
+    ctx.lineTo(-4, baseY);
+    let x = 0, k = 0;
+    while (x < W + 20) {
+      const h = hMin + prand(k * 1.93 + seedOff) * (hMax - hMin);
+      const w = 9 + prand(k * 3.11 + seedOff) * 11;
+      const cx = x + w / 2;
+      const jy = (prand(k * 7.7 + seedOff) - 0.5) * 8;
+      ctx.lineTo(cx - w * 0.42, baseY + jy * 0.3);
+      ctx.lineTo(cx, baseY - h + jy);
+      ctx.lineTo(cx + w * 0.42, baseY + jy * 0.3);
+      x += w * (0.55 + prand(k * 5.23 + seedOff) * 0.5);
+      k++;
+    }
+    ctx.lineTo(W + 4, baseY + 60);
+    ctx.closePath();
+    ctx.fill();
+  }
+  function drawTreeline() {
+    const y0 = RANGES[2].base * H + 6;
+    coniferRow(y0 + 12, '#3d5f4e', 7.7, 22, 52); // back row, darker + taller
+    coniferRow(y0 + 28, '#476b58', 3.1, 14, 36); // front row
+    ctx.fillStyle = '#476b58';
+    ctx.fillRect(0, y0 + 28, W, H);
+  }
+
+  function drawPine(x, y, h, dark) {
+    const w = h * 0.52;
+    ctx.fillStyle = dark ? '#2e4a30' : '#3e5f3a';
+    ctx.beginPath();
+    ctx.moveTo(x, y - h);
+    ctx.lineTo(x - w * 0.5, y - h * 0.35);
+    ctx.lineTo(x - w * 0.30, y - h * 0.35);
+    ctx.lineTo(x - w * 0.62, y + h * 0.10);
+    ctx.lineTo(x - w * 0.38, y + h * 0.10);
+    ctx.lineTo(x - w * 0.70, y + h * 0.44);
+    ctx.lineTo(x + w * 0.70, y + h * 0.44);
+    ctx.lineTo(x + w * 0.38, y + h * 0.10);
+    ctx.lineTo(x + w * 0.62, y + h * 0.10);
+    ctx.lineTo(x + w * 0.30, y - h * 0.35);
+    ctx.lineTo(x + w * 0.50, y - h * 0.35);
+    ctx.closePath();
+    ctx.fill();
+    // Sun-side highlight sliver.
+    ctx.fillStyle = dark ? 'rgba(120,150,110,0.5)' : 'rgba(150,180,135,0.55)';
+    ctx.beginPath();
+    ctx.moveTo(x, y - h);
+    ctx.lineTo(x + w * 0.5, y - h * 0.35);
+    ctx.lineTo(x + w * 0.32, y - h * 0.35);
+    ctx.lineTo(x + w * 0.12, y - h * 0.62);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#4a3a28';
+    ctx.fillRect(x - 3, y + h * 0.44, 6, h * 0.14);
+  }
+
+  const PINES = [];
+  for (let i = 0; i < 17; i++) {
+    PINES.push({ x: prand(i * 1.71), s: 0.8 + prand(i * 3.3) * 1.0, dark: prand(i * 7.9) > 0.5 });
+  }
+  function drawPines(groundTop) {
+    for (const p of PINES) {
+      if (inSafeZone(p.x)) continue; // keep cabin + campfire clearing open
+      drawPine(p.x * W, groundTop + 8, 64 * p.s, p.dark);
+    }
+  }
+
+  // ------------------------------------------------------------------- cabin
+  // Cabin sits to the left so centered dashboard content never covers it.
+  // The campfire lives next to it; both get a tree-free safe zone.
+  const CABIN = { x: 0.16, w: 110, h: 128 };
+  const FIRE = { x: 0.30, s: 0.8 };
+  const SAFE_ZONES = [
+    { x: CABIN.x, r: 0.10 }, // cabin + margin
+    { x: FIRE.x, r: 0.08 }   // campfire + margin
+  ];
+  function inSafeZone(nx) {
+    return SAFE_ZONES.some((z) => Math.abs(nx - z.x) < z.r);
+  }
+  function drawCabin(groundTop) {
+    const x = CABIN.x * W, y = groundTop + 8, w = CABIN.w, h = CABIN.h;
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath(); ctx.ellipse(x, y + 6, w * 0.75, 10, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#5a7a6e';
+    ctx.fillRect(x - w / 2, y - h * 0.55, w, h * 0.55);
+    // Log lines.
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1.5;
+    for (let i = 1; i < 5; i++) {
+      const ly = y - h * 0.55 + (h * 0.55 * i) / 5;
+      ctx.beginPath(); ctx.moveTo(x - w / 2, ly); ctx.lineTo(x + w / 2, ly); ctx.stroke();
+    }
+    // Roof with overhang + ridge shadow.
+    ctx.fillStyle = '#8b6f47';
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2 - 10, y - h * 0.55);
+    ctx.lineTo(x, y - h * 1.02);
+    ctx.lineTo(x + w / 2 + 10, y - h * 0.55);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(x, y - h * 1.02);
+    ctx.lineTo(x + w / 2 + 10, y - h * 0.55);
+    ctx.lineTo(x + w / 2 - 12, y - h * 0.55);
+    ctx.lineTo(x, y - h * 0.86);
+    ctx.closePath(); ctx.fill();
+    // Door + warm windows.
+    ctx.fillStyle = '#3d4a47';
+    ctx.fillRect(x - 15, y - 42, 30, 42);
+    ctx.fillStyle = '#ffd97a';
+    ctx.fillRect(x - w / 2 + 16, y - h * 0.36, 22, 22);
+    ctx.fillRect(x + w / 2 - 38, y - h * 0.36, 22, 22);
+    ctx.fillStyle = 'rgba(255,217,122,0.35)';
+    ctx.fillRect(x - w / 2 + 12, y - h * 0.36 - 4, 30, 30);
+    ctx.fillRect(x + w / 2 - 42, y - h * 0.36 - 4, 30, 30);
+    // Stone chimney.
+    ctx.fillStyle = '#6e6a63';
+    ctx.fillRect(x + w * 0.20, y - h * 1.06, 16, h * 0.42);
+    return { x: x + w * 0.20 + 8, y: y - h * 1.06 };
+  }
+
+  // ---------------------------------------------------------------- campfire
+  function drawFireBase(x, y) {
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath(); ctx.ellipse(x, y + 8, 64, 12, 0, 0, Math.PI * 2); ctx.fill();
+    // Stone ring.
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2;
+      ctx.fillStyle = i % 2 ? '#8a8d90' : '#75787c';
+      ctx.beginPath();
+      ctx.ellipse(x + Math.cos(a) * 52, y + 4 + Math.sin(a) * 12, 11, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Crossed logs.
+    ctx.lineCap = 'round';
+    const logs = [[-32, -6, 30, 6], [30, -4, -30, 8], [0, -12, 4, 10]];
+    ctx.strokeStyle = '#5a4028';
+    ctx.lineWidth = 11;
+    for (const [x1, y1, x2, y2] of logs) {
+      ctx.beginPath(); ctx.moveTo(x + x1, y + y1); ctx.lineTo(x + x2, y + y2); ctx.stroke();
+    }
+    ctx.strokeStyle = '#7a5a38';
+    ctx.lineWidth = 4;
+    for (const [x1, y1, x2, y2] of logs) {
+      ctx.beginPath(); ctx.moveTo(x + x1, y + y1 - 2); ctx.lineTo(x + x2, y + y2 - 2); ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+  }
+
+  const flames = [], smokes = [], sparks = [];
+  function emitFire(x, y, intensity, dt) {
+    const n = Math.round(intensity * 60 * dt);
+    for (let i = 0; i < n; i++) {
+      flames.push({
+        x: x + (Math.random() - 0.5) * 26,
+        y: y - Math.random() * 6,
+        vy: -(50 + Math.random() * 70) * (0.5 + intensity),
+        life: 0, ttl: 0.5 + Math.random() * 0.5,
+        r: 7 + Math.random() * 9
+      });
+    }
+    if (Math.random() < intensity * 8 * dt) {
+      smokes.push({ x: x + (Math.random() - 0.5) * 10, y: y - 46, life: 0, ttl: 2.6, r: 6 });
+    }
+    if (Math.random() < intensity * 10 * dt) {
+      sparks.push({
+        x: x + (Math.random() - 0.5) * 20, y: y - 10,
+        vx: (Math.random() - 0.5) * 60, vy: -(90 + Math.random() * 90),
+        life: 0, ttl: 0.6 + Math.random() * 0.5
+      });
+    }
+  }
+  function stepFire(dt, flicker) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = flames.length - 1; i >= 0; i--) {
+      const f = flames[i];
+      f.life += dt;
+      if (f.life >= f.ttl) { flames.splice(i, 1); continue; }
+      const t = f.life / f.ttl; // 0 young -> 1 old
+      f.x += Math.sin((f.life * 9) + f.y) * 14 * dt;
+      f.y += f.vy * dt;
+      const r = f.r * (1 - t * 0.75) * flicker;
+      const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, Math.max(0.1, r));
+      // Yellow core -> orange -> fading red.
+      g.addColorStop(0, 'rgba(255,236,150,' + (0.9 * (1 - t)).toFixed(3) + ')');
+      g.addColorStop(0.5, 'rgba(255,150,50,' + (0.55 * (1 - t)).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(200,60,20,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(f.x, f.y, Math.max(0.1, r), 0, Math.PI * 2); ctx.fill();
+    }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.life += dt;
+      if (s.life >= s.ttl) { sparks.splice(i, 1); continue; }
+      s.x += (s.vx + Math.sin(s.life * 20) * 20) * dt;
+      s.y += s.vy * dt;
+      ctx.globalAlpha = 1 - s.life / s.ttl;
+      ctx.fillStyle = '#ffdf8a';
+      ctx.fillRect(s.x, s.y, 2, 2);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    for (let i = smokes.length - 1; i >= 0; i--) {
+      const s = smokes[i];
+      s.life += dt;
+      if (s.life >= s.ttl) { smokes.splice(i, 1); continue; }
+      const t = s.life / s.ttl;
+      s.y -= 22 * dt;
+      s.x += Math.sin(s.life * 2 + s.y * 0.05) * 8 * dt;
+      ctx.globalAlpha = 0.22 * (1 - t);
+      ctx.fillStyle = '#cfd4d6';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r + t * 16, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawFireGlow(x, y, intensity, time) {
+    const flicker = 0.82 + 0.12 * Math.sin(time * 11) + 0.06 * Math.sin(time * 23 + 1.7);
+    const r = (60 + intensity * 90) * flicker;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,190,90,' + (0.35 + intensity * 0.3).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(255,150,60,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    return flicker;
+  }
+
+  // ------------------------------------------------------------------ clouds
+  // Seeded puff layouts: 6-8 puffs on an arc + a solid base ellipse mass,
+  // so unions cannot gap (the "hole" in the old 4-puff stamp).
+  const CLOUDS = [];
+  for (let i = 0; i < 5; i++) {
+    CLOUDS.push({
+      bx: prand(i * 3.7), by: 0.10 + prand(i * 9.1) * 0.26,
+      s: 0.7 + prand(i * 5.3) * 0.7, speed: 8 + prand(i * 1.3) * 10,
+      seed: 10 + i * 17.31
+    });
+  }
+  function cloudPuffs(seed) {
+    const puffs = [];
+    const n = 6 + Math.floor(prand(seed) * 3); // 6-8
+    for (let k = 0; k < n; k++) {
+      const t = n === 1 ? 0.5 : k / (n - 1);
+      const j1 = prand(seed + k * 3.77), j2 = prand(seed + k * 9.13);
+      puffs.push({
+        dx: (t - 0.5) * 1.55 * (0.85 + j1 * 0.3),       // in units of size
+        dy: -Math.sin(Math.PI * clamp(t, 0.02, 0.98)) * 0.34 * (0.8 + j2 * 0.4) + 0.06,
+        r: 0.34 + j2 * 0.14
+      });
+    }
+    // Low filler puffs straddling the base rim so it never shows naked.
+    puffs.push({ dx: -0.42 * (0.9 + prand(seed + 51) * 0.2), dy: 0.16, r: 0.30 });
+    puffs.push({ dx: 0.44 * (0.9 + prand(seed + 77) * 0.2), dy: 0.17, r: 0.32 });
+    puffs.push({ dx: (prand(seed + 99) - 0.5) * 0.1, dy: 0.20, r: 0.30 });
+    return puffs;
+  }
+  function drawCloud(x, y, size, seed, time, debug) {
+    const bob = Math.sin(time * 0.5 + seed) * 3;
+    y += bob;
+    // Base mass: guarantees coverage under every layout, dissolving
+    // toward the bottom rim instead of ending in a solid edge.
+    const baseG = ctx.createLinearGradient(0, y - size * 0.4, 0, y + size * 0.35);
+    baseG.addColorStop(0, 'rgba(255,255,255,0.95)');
+    baseG.addColorStop(0.7, 'rgba(240,244,246,0.8)');
+    baseG.addColorStop(1, 'rgba(235,240,243,0)');
+    ctx.fillStyle = baseG;
+    ctx.beginPath();
+    ctx.ellipse(x, y + size * 0.05, size * 0.85, size * 0.34, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Puffs.
+    const puffs = cloudPuffs(seed);
+    for (const p of puffs) {
+      const px = x + p.dx * size, py = y + p.dy * size, pr = p.r * size;
+      const g = ctx.createRadialGradient(px, py - pr * 0.25, 0, px, py, pr);
+      g.addColorStop(0, 'rgba(255,255,255,0.95)');
+      g.addColorStop(0.7, 'rgba(240,244,246,0.75)');
+      g.addColorStop(1, 'rgba(235,240,243,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+      if (debug) {
+        ctx.strokeStyle = 'rgba(220,40,40,0.8)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    if (debug) {
+      ctx.strokeStyle = 'rgba(220,40,40,0.8)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + size * 0.05, size * 0.85, size * 0.34, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // -------------------------------------------------------------------- loop
+  let lastTs = null, frames = 0, fpsTs = performance.now();
+  function frame(ts) {
+    if (lastTs === null) lastTs = ts;
+    const dt = Math.min(0.05, (ts - lastTs) / 1000);
+    lastTs = ts;
+    const time = ts / 1000;
+    const intensity = fireSlider.value / 100;
+    const debug = debugBox.checked;
+
+    drawSky();
+
+    // Ground.
+    const groundTop = GROUND_TOP * H;
+    const gg = ctx.createLinearGradient(0, groundTop, 0, H);
+    gg.addColorStop(0, '#4d6f5b');
+    gg.addColorStop(1, '#2c4326');
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, groundTop, W, H - groundTop);
+
+    drawRanges();
+    drawTreeline();
+    drawSun();
+    drawPines(groundTop);
+    drawCabin(groundTop);
+
+    // Clouds drift slowly; wrap with margin.
+    for (const c of CLOUDS) {
+      const span = W + 560;
+      const x = ((c.bx * span + time * c.speed) % span + span) % span - 280;
+      drawCloud(x, c.by * H, 64 * c.s * (W / 1400 + 0.6), c.seed, time, debug);
+    }
+
+    // Campfire, scaled to 80%.
+    const fx = FIRE.x * W, fy = groundTop + 26;
+    ctx.save();
+    ctx.translate(fx, fy);
+    ctx.scale(FIRE.s, FIRE.s);
+    const flicker = drawFireGlow(0, -10, intensity, time);
+    drawFireBase(0, 0);
+    emitFire(0, -8, intensity, dt);
+    stepFire(dt, flicker);
+    ctx.restore();
+
+    frames++;
+    if (ts - fpsTs >= 1000) {
+      fpsEl.textContent = frames;
+      frames = 0;
+      fpsTs = ts;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
