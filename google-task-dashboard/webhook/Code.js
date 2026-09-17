@@ -3,15 +3,16 @@
  */
 
 const SPREADSHEET_PROP_KEY = 'SPREADSHEET_ID';
-const LAST_SYNC_PROP_KEY = 'LAST_SYNC_TIME';
 const AUTO_SYNC_PROP_KEY = 'AUTO_SYNC_ENABLED';
-const SYNC_LOCK_COOLDOWN_MS = 10000; // 10 seconds debounce lock
 const PAGE_FETCH_LIMIT = 50; // Safety batch size within Apps Script limits
-const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity'];
-const TOP_OVERDUE_ITEMS = 5;
-const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity'];
+const SHEET_HEADERS = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity', 'subtasks_open', 'subtasks_completed'];
+const TOP_OVERDUE_STORAGE_ITEMS = 20; // Rows retained in Top Overdue sheet
+const TOP_OVERDUE_DISPLAY_ITEMS = 5; // Tasks shown on dashboard
+const TOP_OVERDUE_HEADERS = ['taskId', 'taskListId', 'taskListName', 'title', 'dueDate', 'overdueDuration', 'severity', 'parent'];
 const OVERDUE_HOUR = 21;
 const DEFAULT_TIMEZONE = 'Europe/Bucharest';
+const TIMEOUT_INTERACTIVE_MS = 5000; // 5s for user-clicked operations
+const TIMEOUT_TRIGGER_MS = 10000; // 10s for automated triggers
 
 /**
  * Serves the web dashboard HTML interface.
@@ -34,6 +35,43 @@ function doGet() {
  */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
+ * Executes a callback while holding a script-level mutex lock.
+ * Uses LockService for true mutual exclusion across all executions.
+ * Automatically flushes spreadsheet before releasing the lock.
+ * @param {number} timeoutMs - Timeout in milliseconds for lock acquisition
+ * @param {Function} callback - Function to execute while holding the lock
+ * @return {Object} - {success: true, result: callback_result} or {success: false, error: string}
+ */
+function withScriptLock(timeoutMs, callback) {
+  const lock = LockService.getScriptLock();
+  
+  if (!lock.tryLock(timeoutMs)) {
+    return {
+      success: false,
+      error: 'Another sync or maintenance operation is already running. Try again shortly.'
+    };
+  }
+
+  try {
+    const result = callback();
+    // Flush any pending Spreadsheet operations before releasing the lock
+    SpreadsheetApp.flush();
+    return {
+      success: true,
+      result: result
+    };
+  } catch (err) {
+    Logger.log('Error during locked operation: ' + err);
+    return {
+      success: false,
+      error: (err && (err.message || err.toString())) || 'Unknown error during operation'
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -80,7 +118,7 @@ function getOrCreateSheet() {
 }
 
 /**
- * Retrieves or creates the Top Overdue sheet for storing top 10 overdue tasks.
+ * Retrieves or creates the Top Overdue sheet for storing top overdue tasks.
  * @return {GoogleAppsScript.Spreadsheet.Sheet}
  */
 function getOrCreateTopOverdueSheet() {
@@ -110,14 +148,9 @@ function getSpreadsheetUrl() {
 }
 
 /**
- * Ingests current task counts across all lists and appends an aggregate row.
- * Handles rate limits, null checks on response items, and locks.
- * @return {Object} The freshly calculated snapshot metrics
- */
-/**
  * Extracts task weight from title prefix.
  * Prefix rules: no prefix = 1, "!" = 2, "!!" = 3, "!!!" = 4, "!!!!" = 5.
- * Prefix must be at the beginning of the title only.
+ * Longer prefixes are capped at 5. Prefix must be at the beginning of the title only.
  * @param {string} title - Task title
  * @return {number} - Weight (1-5)
  */
@@ -229,7 +262,14 @@ function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
   return new Date(Date.UTC(year, month, day, overdueHour, 0, 0));
 }
 
-function ingestTaskMetrics() {
+/**
+ * Internal metrics ingestion logic (assumes caller holds the lock).
+ * Fetches all tasks, calculates metrics, persists snapshot and top overdue.
+ * Tasks due more than 6 months in the future are intentionally excluded
+ * from all counts to keep metrics focused on actionable work.
+ * @return {Object} - snapshot object {timestamp, open, completed, overdue, overdue_severity}
+ */
+function ingestTaskMetricsInternal() {
   const now = new Date();
   const sixMonthsCutoff = new Date(now);
   sixMonthsCutoff.setMonth(sixMonthsCutoff.getMonth() + 6);
@@ -242,22 +282,34 @@ function ingestTaskMetrics() {
   let totalCompleted = 0;
   let totalOverdue = 0;
   let totalOverdueSeverity = 0.0;
+  let totalSubtasksOpen = 0;
+  let totalSubtasksCompleted = 0;
   const overdueTasksList = [];
 
   forEachTaskInAllLists((task, listId, listTitle) => {
     const weight = getTaskWeight(task.title);
+    const isSubtask = !!task.parent;
 
     if (task.status === 'completed') {
       totalCompleted += weight;
+      if (isSubtask) {
+        totalSubtasksCompleted += weight;
+      }
     } else if (task.status === 'needsAction') {
       if (!task.due) {
         totalOpen += weight;
+        if (isSubtask) {
+          totalSubtasksOpen += weight;
+        }
       } else {
         const dueDateStr = task.due;
         const dueDateObj = new Date(dueDateStr);
 
         if (!isNaN(dueDateObj.getTime()) && dueDateObj <= sixMonthsCutoff) {
           totalOpen += weight;
+          if (isSubtask) {
+            totalSubtasksOpen += weight;
+          }
 
           // Memoize deadline calculation by due date
           if (!deadlineCache[dueDateStr]) {
@@ -279,7 +331,8 @@ function ingestTaskMetrics() {
               title: task.title || '',
               dueDate: dueDateStr,
               overdueDuration: daysOverdue,
-              severity: Number(severity.toFixed(2))
+              severity: Number(severity.toFixed(2)),
+              parent: task.parent || ''
             });
           }
         }
@@ -292,7 +345,9 @@ function ingestTaskMetrics() {
     open: totalOpen,
     completed: totalCompleted,
     overdue: totalOverdue,
-    overdue_severity: Number(totalOverdueSeverity.toFixed(2))
+    overdue_severity: Number(totalOverdueSeverity.toFixed(2)),
+    subtasks_open: totalSubtasksOpen,
+    subtasks_completed: totalSubtasksCompleted
   };
 
   const sheet = getOrCreateSheet();
@@ -301,49 +356,62 @@ function ingestTaskMetrics() {
     snapshot.open,
     snapshot.completed,
     snapshot.overdue,
-    snapshot.overdue_severity
+    snapshot.overdue_severity,
+    snapshot.subtasks_open,
+    snapshot.subtasks_completed
   ]);
 
   overdueTasksList.sort((a, b) => b.severity - a.severity);
-  const topTen = overdueTasksList.slice(0, 10);
-  updateTopOverdueSheet(topTen);
+  const topOverdue = overdueTasksList.slice(0, TOP_OVERDUE_STORAGE_ITEMS);
+  updateTopOverdueSheet(topOverdue);
 
   return snapshot;
 }
 
 /**
- * Updates the Top Overdue sheet with the top 10 overdue tasks.
- * Clears existing data and writes new top 10 rows.
- * @param {Array<Object>} topTenTasks - Array of top 10 overdue task objects
+ * Public entry point for metrics ingestion (locking wrapper).
+ * Acquires script lock before delegating to ingestTaskMetricsInternal.
+ * Used by manual sync trigger and automated background sync.
+ * @return {Object} - {success: true, result: snapshot} or {success: false, error: string}
  */
-function updateTopOverdueSheet(topTenTasks) {
+function ingestTaskMetrics() {
+  return withScriptLock(TIMEOUT_TRIGGER_MS, ingestTaskMetricsInternal);
+}
+
+/**
+ * Stores the top overdue tasks in the Top Overdue sheet.
+ * The sheet retains TOP_OVERDUE_STORAGE_ITEMS tasks for human inspection.
+ * @param {Array<Object>} topOverdueTasks - Array of top overdue task objects
+ */
+function updateTopOverdueSheet(topOverdueTasks) {
   const sheet = getOrCreateTopOverdueSheet();
   const lastRow = sheet.getLastRow();
 
-  // Delete all data rows (keep header at row 1)
   if (lastRow > 1) {
     sheet.deleteRows(2, lastRow - 1);
   }
 
-  // Append new top 10 rows
-  for (let i = 0; i < topTenTasks.length; i++) {
-    const task = topTenTasks[i];
-    sheet.appendRow([
-      task.taskId,
-      task.taskListId,
-      task.taskListName,
-      task.title,
-      task.dueDate,
-      Number(task.overdueDuration.toFixed(2)),
-      task.severity
-    ]);
+  // Batch build rows instead of loop append
+  const rows = topOverdueTasks.map(task => [
+    task.taskId,
+    task.taskListId,
+    task.taskListName,
+    task.title,
+    task.dueDate,
+    Number(task.overdueDuration.toFixed(2)),
+    task.severity,
+    task.parent || ''
+  ]);
+
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, 8).setValues(rows);
   }
 }
 
 /**
  * Fetches all historical time series metrics from the spreadsheet.
- * Includes data validation and type coercion. Also fetches top 10 overdue tasks.
- * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean, topOverdueTasksTop3: Array<Object> }
+ * Includes data validation and type coercion. Also fetches top overdue tasks.
+ * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean, topOverdueTasksTopX: Array<Object> }
  */
 function getDashboardData() {
   const sheet = getOrCreateSheet();
@@ -352,11 +420,12 @@ function getDashboardData() {
   const lastCol = sheet.getLastColumn();
 
   if (lastRow <= 1) {
-    ingestTaskMetrics();
+    // Auto-init: call internal version directly (no locking needed since this is a single execution)
+    ingestTaskMetricsInternal();
     return getDashboardData();
   }
 
-  const rawValues = sheet.getRange(1, 1, lastRow, Math.max(5, lastCol)).getValues();
+  const rawValues = sheet.getRange(1, 1, lastRow, Math.max(7, lastCol)).getValues();
   const headers = rawValues[0];
   const validRows = [];
 
@@ -376,27 +445,31 @@ function getDashboardData() {
     const completed = isNaN(Number(row[2])) ? 0 : Math.max(0, Number(row[2]));
     const overdue = isNaN(Number(row[3])) ? 0 : Math.max(0, Number(row[3]));
     const severity = isNaN(Number(row[4])) ? 0 : Math.max(0, Number(Number(row[4]).toFixed(2)));
+    const subtasksOpen = isNaN(Number(row[5])) ? 0 : Math.max(0, Number(row[5]));
+    const subtasksCompleted = isNaN(Number(row[6])) ? 0 : Math.max(0, Number(row[6]));
 
-    validRows.push([isoTimestamp, open, completed, overdue, severity]);
+    validRows.push([isoTimestamp, open, completed, overdue, severity, subtasksOpen, subtasksCompleted]);
   }
 
-  // Fetch top 3 overdue tasks from the Top Overdue sheet
-  const topOverdueTasksTopX = getTopOverdueTasksTopX();
+  // Fetch top overdue tasks for dashboard display (limited to TOP_OVERDUE_DISPLAY_ITEMS)
+  const topOverdueTasksForDisplay = getTopOverdueTasksForDisplay();
 
   return {
     headers: headers,
     rows: validRows,
     sheetUrl: sheetUrl,
     triggerActive: isTriggerActive(),
-    topOverdueTasksTopX: topOverdueTasksTopX
+    topOverdueTasksTopX: topOverdueTasksForDisplay
   };
 }
 
 /**
- * Fetches the top 3 overdue tasks from the Top Overdue sheet.
- * @return {Array<Object>} Top 3 overdue tasks or empty array if none exist
+ * Returns the top overdue tasks for dashboard display.
+ * Limited to TOP_OVERDUE_DISPLAY_ITEMS tasks (typically 5).
+ * Reads from the Top Overdue sheet, which may contain more tasks for human inspection.
+ * @return {Array<Object>} Top overdue tasks to display or empty array if none exist
  */
-function getTopOverdueTasksTopX() {
+function getTopOverdueTasksForDisplay() {
   try {
     const sheet = getOrCreateTopOverdueSheet();
     const lastRow = sheet.getLastRow();
@@ -405,7 +478,7 @@ function getTopOverdueTasksTopX() {
       return [];
     }
 
-    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_ITEMS, lastRow - 1), 7).getValues();
+    const rawValues = sheet.getRange(2, 1, Math.min(TOP_OVERDUE_DISPLAY_ITEMS, lastRow - 1), 8).getValues();
     const tasks = [];
 
     for (let i = 0; i < rawValues.length; i++) {
@@ -419,7 +492,8 @@ function getTopOverdueTasksTopX() {
         title: row[3] || '',
         dueDate: row[4] || '',
         overdueDuration: isNaN(Number(row[5])) ? 0 : Number(row[5]),
-        severity: isNaN(Number(row[6])) ? 0 : Number(row[6])
+        severity: isNaN(Number(row[6])) ? 0 : Number(row[6]),
+        parent: row[7] || ''
       });
     }
 
@@ -431,28 +505,34 @@ function getTopOverdueTasksTopX() {
 }
 
 /**
- * Concurrency-safe manual sync.
- * @return {Object} Refreshed dashboard data.
+ * Concurrency-safe manual sync (interactive entry point).
+ * @return {Object} Refreshed dashboard data or error.
  */
 function syncNow() {
-  acquireSyncLock();
-  try {
-    ingestTaskMetrics();
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+    ingestTaskMetricsInternal();
     return getDashboardData();
-  } finally {
-    releaseSyncLock();
+  });
+
+  // Unwrap the lock result
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error
+    };
   }
+
+  return result.result;
 }
 
 /**
- * Concurrency-safe Sync and Clear ALL completed tasks across all lists.
- * @return {Object} Refreshed dashboard data.
+ * Concurrency-safe Sync and Clear ALL completed tasks across all lists (interactive entry point).
+ * @return {Object} Refreshed dashboard data or error.
  */
 function syncAndClearTasks() {
-  acquireSyncLock();
-  try {
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
     // 1. Ingest metrics first for safe persistence
-    ingestTaskMetrics();
+    ingestTaskMetricsInternal();
 
     // 2. Clear completed tasks in each task list
     const taskListsResult = Tasks.Tasklists.list();
@@ -467,9 +547,17 @@ function syncAndClearTasks() {
     }
 
     return getDashboardData();
-  } finally {
-    releaseSyncLock();
+  });
+
+  // Unwrap the lock result
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error
+    };
   }
+
+  return result.result;
 }
 
 /**
@@ -481,11 +569,10 @@ function syncAndClearTasks() {
 function deleteOldCompletedTasks(cutoffWeeks) {
   const startTime = Date.now();
   const weeks = (typeof cutoffWeeks === 'number' && cutoffWeeks > 0) ? cutoffWeeks : 8;
-  const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
-  const cutoffDate = new Date(startTime - cutoffMs);
-
-  acquireSyncLock();
-  try {
+  
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+    const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(startTime - cutoffMs);
     let totalDeleted = 0;
 
     forEachTaskInAllLists((task, listId, listTitle) => {
@@ -514,7 +601,7 @@ function deleteOldCompletedTasks(cutoffWeeks) {
       }
     });
 
-    ingestTaskMetrics();
+    ingestTaskMetricsInternal();
     const dashboardData = getDashboardData();
     const durationMs = Date.now() - startTime;
 
@@ -526,31 +613,31 @@ function deleteOldCompletedTasks(cutoffWeeks) {
       durationMs: durationMs,
       data: dashboardData
     };
-  } catch (err) {
-    Logger.log('[DELETE_OLD] Error: ' + err);
+  });
+
+  // Unwrap the withScriptLock result
+  if (!result.success) {
     return {
       success: false,
       tasksDeleted: 0,
       durationMs: Date.now() - startTime,
-      error: (err && (err.message || err.toString())) || 'Failed to delete old completed tasks'
+      error: result.error
     };
-  } finally {
-    releaseSyncLock();
   }
+
+  return result.result;
 }
 
 /**
- * Extracts UTC calendar date in 'YYYY-MM-DD' format.
+ * Extracts calendar date in 'YYYY-MM-DD' format using the script timezone,
+ * consistent with overdue deadline calculations.
  * @param {string|Date} timestamp
  * @return {string|null}
  */
 function extractCalendarDate(timestamp) {
   const d = new Date(timestamp);
   if (isNaN(d.getTime())) return null;
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return Utilities.formatDate(d, getTimezone(), 'yyyy-MM-dd');
 }
 
 /**
@@ -558,16 +645,15 @@ function extractCalendarDate(timestamp) {
  * Mode "daily": Reduces old data (>1 year) to 1 snapshot per calendar day.
  * Mode "hourly": Reduces recent data (<1 year) to 1 snapshot per 60-minute window.
  * @param {string} mode - Either "daily" or "hourly"
- * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, removed: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
+ * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, totalRemoved: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
  */
 function compressSheetData(mode) {
   const startTime = Date.now();
-  const isDaily = mode === 'daily';
-  const logPrefix = isDaily ? '[PRUNE]' : '[DOWNSAMPLE]';
+  
+  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
+    const isDaily = mode === 'daily';
+    const logPrefix = isDaily ? '[PRUNE]' : '[DOWNSAMPLE]';
 
-  acquireSyncLock();
-
-  try {
     const sheet = getOrCreateSheet();
     const lastRow = sheet.getLastRow();
     const totalDataRowsBefore = Math.max(0, lastRow - 1);
@@ -634,7 +720,6 @@ function compressSheetData(mode) {
       // Hourly mode: recent data (<1 year), keep 1 per fixed 60-minute bucket (latest wins)
       if (candidateRows && candidateRows.length > 0) {
         const ONE_HOUR_MS = 60 * 60 * 1000;
-        const seenBuckets = {}; // bucket -> currently kept rowNumber (latest so far)
 
         for (let i = 0; i < candidateRows.length; i++) {
           const current = candidateRows[i];
@@ -702,20 +787,22 @@ function compressSheetData(mode) {
       durationMs: durationMs,
       message: 'Removed ' + totalRemoved + ' rows. Kept ' + totalDataRowsAfter + '.'
     };
-  } catch (err) {
-    Logger.log(logPrefix + ' Error: ' + err);
+  });
+
+  // Unwrap the withScriptLock result
+  if (!result.success) {
     return {
       success: false,
-      error: (err && (err.message || err.toString())) || 'Unknown error',
+      error: result.error,
       totalBefore: 0,
       totalAfter: 0,
       totalRemoved: 0,
       percentageRemoved: 0,
       durationMs: Date.now() - startTime
     };
-  } finally {
-    releaseSyncLock();
   }
+
+  return result.result;
 }
 
 /**
@@ -741,30 +828,6 @@ function downsampleLastYearToHourly() {
  */
 function getScriptProjectId() {
   return ScriptApp.getScriptId();
-}
-
-/**
- * Lock acquisition to prevent concurrent sync operations (10s cooldown).
- */
-function acquireSyncLock() {
-  const scriptProps = PropertiesService.getScriptProperties();
-  const lastSync = Number(scriptProps.getProperty(LAST_SYNC_PROP_KEY) || 0);
-  const now = Date.now();
-
-  if (lastSync && (now - lastSync) < SYNC_LOCK_COOLDOWN_MS) {
-    const waitSec = Math.ceil((SYNC_LOCK_COOLDOWN_MS - (now - lastSync)) / 1000);
-    throw new Error('A sync or maintenance task is already in progress. Please wait ' + waitSec + 's.');
-  }
-
-  scriptProps.setProperty(LAST_SYNC_PROP_KEY, String(now));
-}
-
-/**
- * Releases or refreshes the sync lock timestamp.
- */
-function releaseSyncLock() {
-  const scriptProps = PropertiesService.getScriptProperties();
-  scriptProps.setProperty(LAST_SYNC_PROP_KEY, String(Date.now()));
 }
 
 /**

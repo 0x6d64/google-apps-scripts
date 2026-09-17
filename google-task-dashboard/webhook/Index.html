@@ -3,7 +3,6 @@
 <head>
   <base target="_top">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google Tasks Dashboard</title>
 
   <?!= include('Styles'); ?>
@@ -13,38 +12,39 @@
 </head>
 
 <body>
-  <canvas id="trajectoryWeather"></canvas>
+  <canvas id="trajectoryWeather" aria-hidden="true"></canvas>
+  <canvas id="trajectoryFire" aria-hidden="true"></canvas>
 
   <main class="container">
     <!-- Header with Title & Action Controls -->
     <header class="header">
-      <div>
+      <div class="header-title">
         <h1>Tasks Dashboard</h1>
         <p class="subtitle" id="lastSnapshotAge">Aggregate Google Tasks Health & Time Series Trends</p>
-        <p class="subtitle" id="lastSheetFetchAge" style="display: none;"></p>
+        <p class="subtitle hidden" id="lastSheetFetchAge"></p>
       </div>
 
       <div class="header-actions">
-        <a id="btnAdmin" href="#" target="_blank" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
-          <span class="btn-icon">⚙️</span> Admin
-        </a>
-        <a id="sheetLink" href="#" target="_blank" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
-          <span class="btn-icon">📊</span> View Sheet
-        </a>
-        <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
-          <span class="btn-icon">🔗</span> Launch Google Tasks
-        </a>
-        <button id="btnSyncNow" class="btn btn-secondary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts." onclick="DashboardApp.handleSyncNow()">
-          <span class="btn-icon">⚡</span> Ingest From Tasks
+        <button id="btnAdmin" class="btn btn-secondary" title="Open the Apps Script project editor (admin area).">
+          <span class="btn-icon" aria-hidden="true">⚙️</span> Admin
         </button>
-        <button id="btnReloadData" class="btn btn-primary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs." onclick="DashboardApp.handleReloadData()">
-          <span class="btn-icon">🔄</span> Fetch Data From Sheet
+        <button id="sheetLink" class="btn btn-secondary" title="Open the Google Spreadsheet in Google Drive to view raw snapshot logs and audit historical rows.">
+          <span class="btn-icon" aria-hidden="true">📊</span> View Sheet
+        </button>
+        <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
+          <span class="btn-icon" aria-hidden="true">🔗</span> Launch Google Tasks
+        </a>
+        <button id="btnSyncNow" class="btn btn-secondary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts.">
+          <span class="btn-icon" aria-hidden="true">⚡</span> Ingest From Tasks
+        </button>
+        <button id="btnReloadData" class="btn btn-primary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs.">
+          <span class="btn-icon" aria-hidden="true">🔄</span> Fetch Data From Sheet
         </button>
       </div>
     </header>
 
     <!-- Status / Feedback Toast Banner -->
-    <div id="statusBanner" class="status-banner" style="display: none;"></div>
+    <div id="statusBanner" class="status-banner hidden" role="status"></div>
 
     <!-- Top KPI Summary Cards -->
     <section class="cards">
@@ -72,11 +72,11 @@
         <div class="subtext">Backlog debt (√days)</div>
       </div>
 
-      <div class="card card-purple" id="backlogEstimateCard" style="display: none;">
+      <div class="card card-purple hidden" id="backlogEstimateCard">
         <div class="label">Backlog ETA</div>
         <div class="value" id="backlogEstimateValue">-</div>
         <div class="subtext" id="backlogEstimateNote">Days to completion</div>
-        <div class="subtext" id="backlogCountsNote" style="margin-top: 4px; font-size: 11px;"></div>
+        <div class="subtext backlog-counts-note hidden" id="backlogCountsNote"></div>
       </div>
     </section>
 
@@ -85,12 +85,12 @@
       <div class="control-group">
         <span class="control-label">Range:</span>
         <div class="pill-group" id="rangeFilterGroup">
-          <button class="pill" data-range="1" title="Filter chart to show snapshots from the past 1 day" onclick="DashboardApp.setRangeFilter(1)">1D</button>
-          <button class="pill active" data-range="3" title="Filter chart to show snapshots from the past 3 days" onclick="DashboardApp.setRangeFilter(3)">3D</button>
-          <button class="pill" data-range="7" title="Filter chart to show snapshots from the past 7 days" onclick="DashboardApp.setRangeFilter(7)">7D</button>
-          <button class="pill" data-range="14" title="Filter chart to show snapshots from the past 14 days" onclick="DashboardApp.setRangeFilter(14)">14D</button>
-          <button class="pill" data-range="30" title="Filter chart to show snapshots from the past 30 days" onclick="DashboardApp.setRangeFilter(30)">30D</button>
-          <button class="pill" data-range="all" title="Show all historical snapshot entries" onclick="DashboardApp.setRangeFilter('all')">All</button>
+          <button class="pill" data-range="1" aria-pressed="false" title="Filter chart to show snapshots from the past 1 day">1D</button>
+          <button class="pill" data-range="3" aria-pressed="false" title="Filter chart to show snapshots from the past 3 days">3D</button>
+          <button class="pill" data-range="7" aria-pressed="false" title="Filter chart to show snapshots from the past 7 days">7D</button>
+          <button class="pill" data-range="14" aria-pressed="false" title="Filter chart to show snapshots from the past 14 days">14D</button>
+          <button class="pill active" data-range="30" aria-pressed="true" title="Filter chart to show snapshots from the past 30 days">30D</button>
+          <button class="pill" data-range="all" aria-pressed="false" title="Show all historical snapshot entries">All</button>
         </div>
       </div>
 
@@ -98,19 +98,19 @@
         <span class="control-label">Series:</span>
         <div class="pill-group" id="seriesToggleGroup">
           <label class="toggle-pill pill-open" title="Toggle On-Time Open Tasks (stacked line/area)">
-            <input type="checkbox" id="toggleOpen" checked onchange="DashboardApp.updateChartVisibility()"> On-Time Open
+            <input type="checkbox" id="toggleOpen" checked> On-Time Open
           </label>
           <label class="toggle-pill pill-overdue" title="Toggle Overdue Tasks (stacked line/area)">
-            <input type="checkbox" id="toggleOverdue" checked onchange="DashboardApp.updateChartVisibility()"> Overdue
+            <input type="checkbox" id="toggleOverdue" checked> Overdue
           </label>
           <label class="toggle-pill pill-completed" title="Toggle Completed Tasks (stacked line/area)">
-            <input type="checkbox" id="toggleCompleted" checked onchange="DashboardApp.updateChartVisibility()"> Completed
+            <input type="checkbox" id="toggleCompleted" checked> Completed
           </label>
           <label class="toggle-pill pill-severity" title="Toggle Overdue Severity score (overlay line on right axis)">
-            <input type="checkbox" id="toggleSeverity" checked onchange="DashboardApp.updateChartVisibility()"> Severity (√days Line)
+            <input type="checkbox" id="toggleSeverity" checked> Severity (√days Line)
           </label>
           <label class="toggle-pill pill-trend" title="Toggle rolling average trend lines (dotted, 60% opacity) for all visible series">
-            <input type="checkbox" id="toggleRollingAvg" onchange="DashboardApp.updateChartVisibility()"> Trend Line
+            <input type="checkbox" id="toggleRollingAvg"> Trend Line
           </label>
         </div>
       </div>
@@ -123,12 +123,12 @@
         <span class="panel-badge">Stacked Lines + Severity Overlay</span>
       </div>
       <div id="mainChart" class="chart-container">
-        <div class="loading-spinner">Loading chart data...</div>
+        <div class="loading-spinner" role="status">Loading chart data...</div>
       </div>
     </section>
 
     <!-- Top n Overdue Tasks -->
-    <section class="panel" id="topOverduePanel" style="display: none;">
+    <section class="panel hidden" id="topOverduePanel">
       <div class="panel-header">
         <h2>Top Overdue Tasks</h2>
         <span class="panel-badge">Most Pressing</span>
@@ -143,12 +143,12 @@
       <details class="danger-zone-details">
         <summary class="danger-zone-summary" title="Click to expand or collapse dangerous maintenance options">
           <span>⚠️ <strong>Danger Zone: Automation & Task Housekeeping</strong></span>
-          <span class="summary-arrow">→</span>
+          <span class="summary-arrow" aria-hidden="true">→</span>
         </summary>
         <div class="danger-zone-content">
           <div class="danger-zone-setting">
             <label class="trigger-toggle-label" title="Enable or disable the 3-hour automated background data collection trigger in Apps Script.">
-              <input type="checkbox" id="toggleAutoTrigger" checked onchange="DashboardApp.handleTriggerToggle(this.checked)">
+              <input type="checkbox" id="toggleAutoTrigger" checked>
               <strong>Automated Background Sync (every 3 hours)</strong>
             </label>
             <p class="setting-desc">When enabled, Apps Script captures snapshot metrics in the Google Sheet every 3 hours automatically.</p>
@@ -160,9 +160,9 @@
               <strong>Auto-Refresh Dashboard from Sheet</strong>
             </label>
             <p class="setting-desc">When enabled, the dashboard automatically refreshes data from the sheet at the selected interval. Updates pause when the browser tab is not visible.</p>
-            <div style="margin-top: 8px; margin-left: 24px;">
-              <label for="autoFetchInterval" style="font-size: 13px; color: var(--text-secondary);">Interval:</label>
-              <select id="autoFetchInterval" style="margin-left: 6px; padding: 4px 8px; font-size: 13px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text);">
+            <div class="auto-fetch-interval">
+              <label for="autoFetchInterval">Interval:</label>
+              <select id="autoFetchInterval">
                 <option value="15">15 minutes</option>
                 <option value="30" selected>30 minutes</option>
                 <option value="60">1 hour</option>
@@ -171,14 +171,14 @@
           </div>
 
           <div class="danger-zone-actions">
-            <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact." onclick="DashboardApp.handleDeleteOldCompletedTasks()">
-              <span class="btn-icon">🗑️</span> Delete Old Done Tasks (>8w)
+            <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact.">
+              <span class="btn-icon" aria-hidden="true">🗑️</span> Delete Old Done Tasks (>8w)
             </button>
-            <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days to at most 1 entry per rolling 60-minute window, keeping the latest snapshot in each window. Permanently removes intra-hour data." onclick="DashboardApp.handleDownsampleLastYear()">
-              <span class="btn-icon">📉</span> Downsample Last Year (1/hour)
+            <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days to at most 1 entry per rolling 60-minute window, keeping the latest snapshot in each window. Permanently removes intra-hour data.">
+              <span class="btn-icon" aria-hidden="true">📉</span> Downsample Last Year (1/hour)
             </button>
-            <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed." onclick="DashboardApp.handlePruneOldData()">
-              <span class="btn-icon">🧹</span> Prune Old Data (>1 year)
+            <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed.">
+              <span class="btn-icon" aria-hidden="true">🧹</span> Prune Old Data (>1 year)
             </button>
           </div>
         </div>

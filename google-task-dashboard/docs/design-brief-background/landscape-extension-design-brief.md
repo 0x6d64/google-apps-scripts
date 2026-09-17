@@ -2,579 +2,247 @@
 
 ## Overview
 
-Integrate the Trajectory Weather visualization into the Tasks Dashboard as a persistent background layer. The landscape displays trajectory metrics computed relative to the selected time-range filter (1D/3D/7D/14D/30D/All), allowing users to see "how am I doing *in this window*?" as a visual mood rather than a number.
+Integrate the Trajectory Weather visualization into the Tasks Dashboard
+as a persistent background layer. The landscape displays trajectory
+metrics computed relative to the selected time-range filter
+(1D/3D/7D/14D/30D/All), allowing users to see "how am I doing *in this
+window*?" as a visual mood rather than a number.
 
-The landscape is **always visible** but **never dominant** — it provides atmospheric context and motivational feedback without interfering with task interaction or data readability.
+The landscape is **always visible** but **never dominant** — it provides
+atmospheric context and motivational feedback without interfering with
+task interaction or data readability.
 
----
+Reference implementation: `campsite-poc.html` (daylight, timeline
+clouds, campfire). Port target: `JavaScript.html` (inline, no new
+files).
 
-## 1. Landscape Integration
+## 1. Integration
 
 ### 1.1 Canvas layer
 
-- **Position**: Fixed, full-screen, `z-index: -1` (behind all dashboard content).
-- **Resolution**: Device pixel ratio scaling (same as POC).
-- **Rendering**: Decoupled from DOM reflows. Update only on range-filter change or on a slow timer (e.g., every 30s to keep clouds drifting smoothly).
-- **Content**: Sky, mountains (back/front), ground, trees, house, clouds/weather, sun.
+- **Position**: Fixed, full-screen, `z-index: -1` (behind all content).
+- **Resolution**: Device pixel ratio scaling, capped at 2 (1.5 below
+  768px width for fill-rate savings).
+- **Render loop** (on-demand, resource-capped): full-rate
+  `requestAnimationFrame` capped at 30fps while a transition is in
+  flight; otherwise single frames painted only on data load, range
+  change, or resize — zero idle cost. `prefers-reduced-motion` snaps
+  transitions and paints once. Rationale: visual sugar must never tax
+  the device; the 0.75s morph is indistinguishable at 30fps.
+- **Content**: Sky, 3 nested mountain ranges, ground, treeline + pines,
+  cabin, campfire, timeline clouds, sun, moon, stars.
 
 ### 1.2 Visual hierarchy
 
-**Fixed landscape elements** (never change):
-- Sky gradient (responsive to time of day or metric-driven atmospheric tint, TBD).
-- Back and front mountains.
-- Ground.
-- House (new).
-- Trees.
+**Fixed landscape elements** (never change): sky gradient, mountain
+ranges, ground, treeline, cabin structure, campfire base (logs, stones).
 
-**Weather elements** (respond to metric):
-- Clouds (color, opacity, spawn rate per weather state).
-- Sun (opacity, glow).
-- Rain streaks (if applicable).
+**Weather elements** (respond to metric): cloud color/opacity/size/rain
+per own snapshot metric, sun opacity and glow.
 
-**Animation**:
-- Clouds drift right-to-left continuously (smooth, unrelated to metric changes).
-- Weather state transitions (color/opacity/spawn rate) are smooth: 0.6–1.0s lerp when range changes.
+**Daylight elements** (respond to time of day): dusk/night washes, sun
+position, moon/stars alpha, foreground silhouette grade, rim light,
+shadow length, fire/window glow boost.
 
----
+**Animation**: timeline clouds are pinned (no drift); appearance morphs
+continuously via `weatherAt()` interpolation, 0.75s on change. Sun
+travels east-to-west. Fire/smoke/sparks animate continuously.
 
-## 2. Metric Computation: Range-Relative
+## 2. Metric Computation
 
 ### 2.1 Core concept
 
-The trajectory metric is computed **relative to the selected range**, anchored against a **fixed 14-day baseline** that never changes, regardless of range selection.
+Trajectory metric is computed **relative to the selected range**,
+anchored against a **fixed 14-day baseline** that never changes:
 
 ```
-velocityBaseline = avg(completions/day, last 14 days)     // FIXED, independent of range
-velocityRecent   = avg(completions/day, last N days)      // N = selected range (1D/3D/7D/14D/30D/All)
+velocityBaseline = avg(completions/day, last 14 days)     // FIXED
+velocityRecent   = avg(completions/day, last N days)      // N = range
 trendRatio       = velocityRecent / velocityBaseline
 metric           = clamp((trendRatio - 0.85) / 0.3, 0, 1)
-                   // same normalization as POC: 0.85 is "steady", 0.3 is the scaling factor
-                   // if baseline is low/zero, default to 0.5 (neutral)
+                   // 0.85 is "steady", 0.3 is the scaling factor
+                   // zero baseline defaults to 0.5 (neutral)
 ```
 
-### 2.2 Why fixed baseline, not range-matched
+Velocities use actual elapsed time between first/last snapshot in each
+window (not fixed intervals), summing positive `completed` deltas only.
+
+### 2.2 Why a fixed baseline
+
+A range-matched baseline would hover near 1.0 (metric collapses to
+noise). The fixed reference point makes narrow ranges (1D/3D) volatile
+(a great day is a sunbreak, a bad day a squall), wide ranges calmer,
+and 30D/All near-neutral — responsive on check-in, meditative on
+review. This is intentional, not a bug.
+
+### 2.3 "All" range and early data
+
+"All" uses the trailing-30d window with the same 14d baseline (behaves
+like 30D). With < 14 days of history, the baseline falls back to all
+available history.
+
+### 2.4 Invariant
+
+Baseline window is always 14 days (or all history if shorter),
+independent of range. Only the numerator window changes.
+
+### 2.5 Per-snapshot metrics (timeline clouds)
+
+Range selection changes only the *visible cloud set*, never the
+metrics: each snapshot carries its own trailing-3d vs trailing-14d
+ratio from data up to its own timestamp. Downsample oldest-first,
+cap ~25, always keep latest. History never rewrites (immutability by
+math, no stored flags).
+
+## 3. Transitions
+
+Range click → compute metric → set target → 0.75s lerp (capped 30fps)
+→ single exact final paint → idle (zero loop cost). Clouds swap visible
+sets instantly (history never rewrites); the sun opacity morphs. No
+state persists between changes. Per-frame cost during transitions is
+bounded (≤25 clouds).
+
+## 4. Glassmorphism (C4: Cool Tint Less Blur)
+
+Standard: `rgba(240,248,255,0.84)`, `blur(8px)`, `1px solid
+rgba(200,220,230,0.3)`, subtle shadow. KPI cards stay solid `#ffffff`
+(high-importance data). Toolbar, chart, overdue, and danger-zone panels
+use C4. Text must hold WCAG 2.0 AA (4.5:1 normal, 3:1 large) over
+actual landscape colors — test with WebAIM, raise opacity on failure.
+Text shadow not required. Modals/notifications stay solid and opaque
+(`z-index`: canvas -1, content 0–10, modals 1000, notifications 2000).
+
+## 5. Composition
+
+**Sky**: gradient `#9fc4cf` → `#e4ecec`. No metric tint (deferred, §12).
+
+**Mountains**: three sine-composed ranges, far (pale) to near (dark):
+back `#b9cfc9`, mid `#8fb3a6`, near `#5f8272`. Polylines must nest —
+no range dips below the silhouette in front, near range never below the
+horizon — so pale "bowls" are structurally impossible. Snowcaps on
+far-range peaks only: filled caps with depth scaling by peak height
+(deep mid-peak, feathered edges) plus a thin top-edge stroke.
+
+**Ground**: 78% down to bottom, gradient `#446354` → `#2c4326`.
+
+**Trees**: irregular conifer-silhouette rows (varied heights, widths,
+spacing, jitter), darker taller back row, solid skirt below so sky never
+peeks through. ~17 foreground pines (largest exceed cabin walls,
+two-tone sun-side shading) placed by min-spacing rejection sampling so
+canopies cannot merge. Nothing spawns inside the safe zones.
+
+**Cabin** (16% across, left side — centered scenery is wasted behind
+dashboard UI; deliberate deviation from the original 35%): moss walls
+`#5a7a6e` with log lines, timber roof `#8b6f47` with overhang and
+shadow side, dark door, warm glowing windows, stone chimney. ~80–120px
+tall. Subtle drop shadow for separation.
+
+**Campfire** (30% across, scale 0.8): stone ring, crossed logs, three
+particle systems (additive flames yellow-to-red, expanding smoke, fast
+sparks) plus flickering ground glow. One intensity parameter drives
+emission and glow radius. Flames live on a dedicated 240x320 overlay
+canvas (`#trajectoryFire`) with its own 12fps loop, so the main scene
+stays on-demand; particles are deterministic functions of wall time
+(no accumulated state, correct at any frame rate). Reduced motion
+paints one static frame, no loop.
+
+**Safe zones**: tree-free discs around cabin (r 0.10) and campfire
+(r 0.08) — realistic clearing, prevents sprite collisions.
+
+**Clouds**: seeded puff layouts (6–11, never a fixed stamp) rendered
+dark-to-light: one flat shadow silhouette (values near sky values),
+then a few small lights on upper puffs biased sun-side. Stormy = dark
+slate, large, rainy; healthy = bright, small, dry. Base shapes dissolve
+at the rim (no naked skirts, no stamp holes — verified geometrically).
+Rain streaks when stormy. No markers or rings on the newest cloud.
+
+**Sun/moon/stars**: sun travels east–west, touching the horizon at
+rise/set; opacity follows the metric. Moon has its own upper-left slot.
+Both render before the cloud loop so weather passes in front; stars get
+an alpha boost to survive the night wash. True light sources (flames,
+glow, window boosts) render after all overlays, undimmed. Depth rule:
+emitters punch through the night; everything else takes the tint.
+
+## 6. Daylight model (Sibiu seasonal blend)
+
+Three stops (day/dusk/night) blended continuously via `{day, dusk}`
+from `dayBlendForDate()`; the frame eases toward it. Sunrise/sunset =
+fixed base hours + sinusoidal seasonal shift for Sibiu, Romania
+(45.8N): `rise = 06:52 − 78min·cos(w)`, `set = 18:48 + 132min·cos(w)`,
+`w = 2π·(doy−172)/365` (±20 min; dawn/dusk windows are 60–75 min wide).
+Dawn reuses the dusk palette. Product seam: replace the internals with
+the sunrise equation once real lat/lon exists; rendering untouched.
 
-If the baseline scaled with the range (e.g., 1D pace vs. 1D baseline, 7D pace vs. 7D baseline), the ratio would always hover near 1.0 — the metric would collapse to noise with no meaningful variation. The design intent requires a **fixed reference point** so that:
+Dusk foreground rules: the sky may glow but the foreground goes dark
+(bottom-up silhouette grade, transparent at horizon); warm rim light on
+sun-facing edges driven by dusk factor; long soft shadows away from the
+low sun, vanishing at noon; shadows stay colored, never black.
 
-- **Narrow ranges (1D/3D)** show **volatile weather**: today's pace vs. your typical two-week norm creates natural, dramatic swings. A great day appears as a sunbreak; a bad day as a squall.
-- **Wide ranges (7D/14D)** show **moderate weather**: a week's or two-week's average vs. the 14-day baseline produces smoother, less reactive movement.
-- **30D range** shows **near-neutral clouds**: a window nearly identical to the baseline itself, so metric clusters around 0.5 ("steady clouds").
-- **"All" range** (per section 2.3) substitutes the 30-day window as the display window and uses the same fixed 14-day baseline, resulting in near-neutral metric — appropriate for "aggregate state" rather than "live signal."
+## 7. UI layer and mobile
 
-This variance in volatility is **intentional**: the dashboard is most emotionally responsive when checking in frequently (1D), and most meditative when reviewing long-term health (30D/All). The landscape reflects that intent directly.
+Card transparency per §4. Danger Zone collapsed by default, ordered by
+destructive impact: Delete Old Done (>8w) → Downsample → Prune (>1y).
+Confirmation dialogs + result modals for destructive actions.
 
-### 2.3 "All" range handling
+Mobile (≤640px): raise panel opacity (`rgba(240,248,255,0.92)`,
+`blur(6px)`) per §4; dashboard is desktop-first. Layout maps 1:1 to the
+viewport with fractional positions and deterministic seeds, so resize
+reflows the same composition instead of stretching it.
 
-When the user selects "All" to show the entire history:
-- The display window is still the trailing 30 days of historical snapshots (for chart density).
-- The metric is computed using the fixed 14-day baseline (not "all history").
-- Result: the "All" view shows historical depth but metrics behave identically to the 30D view, reinforcing the idea that 30 days is a representative equilibrium for the system.
+## 8. Implementation
 
-### 2.4 Edge case: early data (< 14 days history)
-
-When the system has fewer than 14 days of snapshots available:
-- `velocityBaseline = avg(completions/day, all available history)` — fall back to whatever history exists.
-- This ensures early data doesn't get locked into "neutral" artificially; the baseline adapts gracefully during bootstrap.
-- Once 14+ days accumulate, the baseline locks to the trailing 14-day window and remains fixed.
-
-### 2.5 Invariant
-
-**The baseline window is always 14 days (or all available history if shorter), independent of the active range filter. Only the numerator window (velocityRecent) changes with range selection.**
-
-### 2.2 Backward-looking immutability
-
-The metric for any snapshot is computed using only data *up to and including that snapshot's timestamp*. This ensures that loading the dashboard a week later will not change what the landscape showed last week — the trajectory was what it was.
-
-**Implementation**: Compute metric series on the client, in JavaScript, mirroring the existing `calculateVelocity()` logic. Each row in the snapshot data gets a computed metric; that metric is immutable because it depends only on historical data.
-
----
-
-## 3. State management: smooth transitions
-
-### 3.1 Transition model
-
-When the user clicks a range filter button (e.g., 1D → 3D):
-
-1. **Compute new metric** from the selected range data.
-2. **Set target weather state** based on new metric (using `WeatherModel.stateFor()`).
-3. **Animate transition** over 0.6–1.0s:
-   - Cloud colors lerp to target color.
-   - Cloud opacity lerps to target opacity.
-   - Spawn rate smoothly adjusts (new clouds spawn at the new rate).
-   - Sun opacity lerps to target opacity.
-4. **Continue animation** until clouds in flight cross the "horizon" (off-screen left).
-
-No state is persisted between range changes; all transitions are computed from the current metric.
-
-### 3.2 CSS transitions vs. canvas animation
-
-- **Canvas-based**: Smooth, predictable, hardware-accelerated (via requestAnimationFrame).
-- **DOM-based**: Not applicable here; the landscape is pure canvas.
-- **Throttling**: Update the metric and target state only on range-filter clicks, not every frame. The render loop continues smoothly.
-
----
-
-## 4. Transparency: glassmorphism + selective opacity
-
-### 4.1 Glassmorphism design pattern: C4 (Cool Tint Less Blur)
-
-**Selected variant:** C4 — 84% opacity, 8px blur, cool tint (#f0f8ff base).
-
-This variant provides the optimal balance of landscape visibility, text readability, and visual polish. The reduced blur (8px vs. 10–16px) keeps landscape details crisp while the cool tint (#f0f8ff) echoes the sky palette, creating visual cohesion with the environment.
-
-**CSS specification:**
-```css
-/* Standard glassmorphism (C4: Cool Tint Less Blur) */
-.panel,
-.controls-toolbar {
-  background: rgba(240, 248, 255, 0.84);  /* cool tint #f0f8ff */
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(200, 220, 230, 0.3);
-  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
-}
-```
-
-### 4.2 Per-element application
-
-| Element | Background | Rationale |
-|---------|------------|-----------|
-| **KPI cards** | `#ffffff` (solid) | High-importance data; maximize contrast and readability. Landscape visible in gaps between cards. |
-| **Control toolbar** | C4 glassmorphism | Secondary control surface; glassmorphism maintains focus while showing landscape. |
-| **Main chart panel** | C4 glassmorphism | Data visualization; landscape as atmospheric context without distraction. |
-| **Top overdue tasks panel** | C4 glassmorphism | Secondary information; landscape adds mood. |
-| **Danger zone panel** | C4 glassmorphism | Low-frequency interaction; heavier transparency acceptable. |
-| **Daily summary textarea** | C4 glassmorphism | Optional reference; landscape visibility prioritized. |
-
-### 4.3 Text readability with C4
-
-C4 (84% opacity, 8px blur, cool tint) maintains excellent contrast over the cool-blue landscape:
-- **WCAG 2.0 AA**: Verified (4.5:1 ratio for normal text over landscape colors).
-- **Text shadow**: Not required; opacity and blur provide sufficient definition.
-- **Border definition**: `rgba(200, 220, 230, 0.3)` provides subtle separation without harming cohesion.
-
-### 4.3 WCAG 2.0 AA compliance
-
-All text over transparent backgrounds **must** maintain a contrast ratio of at least 4.5:1 for normal text, 3:1 for large text (per WCAG 2.0 AA).
-
-**Testing**:
-- Use WebAIM Contrast Checker or similar.
-- Test with actual landscape colors behind the transparent layer (not white).
-- If contrast is marginal, increase opacity or add a text shadow (`text-shadow: 0 1px 3px rgba(0,0,0,.3)`).
-
----
-
-## 5. Landscape composition
-
-### 5.1 Visual elements
-
-**Sky** (responsive):
-- Gradient from cool blue-grey (#9fc4cf) at top to pale blue-grey (#e4ecec) at bottom.
-- Consider: subtle tint based on metric (slightly warmer when good, cooler when bad)? **TBD in visual iteration.**
-
-**Mountains** (static):
-- Back ridge: 66% down, height 16%, color #9fc0b8, opacity 0.85. Perlin-like ridgeline.
-- Front ridge: 72% down, height 13%, color #7fa39a, opacity 1.0. Perlin-like ridgeline.
-
-**Ground** (static):
-- From 78% down to bottom. Gradient #446354 → #2c4326 (moss-to-dark-green).
-- Optional: subtle radial gradient or texture for visual interest. **TBD.**
-
-**Trees** (static):
-- Conifers scattered along horizon line (78% down).
-- Vary in scale (0.4–1.2x) and darkness (light vs. dark variants).
-- ~6–12 trees across the landscape.
-
-**House** (new, static):
-- **Architecture**: Minimal, geometric. Frank Lloyd Wright cabin aesthetic.
-  - Walls: simple rectangle, color #5a7a6e (muted moss-green with warmth).
-  - Roof: triangle, color #8b6f47 (warm brown, aged timber).
-  - Door: small rectangle, color #3d4a47 (dark).
-  - Windows: optional small squares, color #c9e4e0 (light blue, "interior light").
-- **Position**: Approx. 35% across, 62% down (foreground, visible but not dominant).
-- **Scale**: ~80–120px tall (large enough to notice, small enough not to dominate).
-- **Shadow**: subtle drop shadow or outline to separate from mountains.
-
-**Clouds** (dynamic, per POC):
-- Right-to-left drift, continuous.
-- Color/opacity/size respond to weather state.
-- Spawn rate adjusts with metric (slower in clear weather, faster in stormy).
-- Rain streaks rendered when weather state indicates rain.
-
-**Sun** (dynamic, per POC):
-- Fixed position (78% across, 20% down).
-- Opacity driven by metric (0.0 in storm, 1.0 in clear).
-- Glow effect (radial gradient).
-
----
-
-## 6. UI layer modifications
-
-### 6.1 Card transparency
-
-| Element | Current | Proposed | Rationale |
-|---------|---------|----------|-----------|
-| KPI cards | Solid white | Solid white *or* very light glassmorphism (0.92 opacity, 6px blur) | Preserve contrast; landscape visible in gaps |
-| Control toolbar | Solid white | Glassmorphism (0.87 opacity, 8px blur) | Secondary control surface; balances visibility |
-| Panels (chart, overdue, danger zone) | Solid white | Glassmorphism (0.84 opacity, 10px blur) | Less critical; landscape adds context |
-| Daily summary textarea | Solid #f8f9fa | Glassmorphism (0.88 opacity, 8px blur) on white bg | Readable but contextual |
-
-### 6.2 Text readability
-
-- **Add text shadow** to card labels/titles where contrast is marginal:
-  ```css
-  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.5);
-  ```
-- **Test**: WebAIM Contrast Checker, actual landscape colors as background.
-- **Fallback**: If contrast fails, increase opacity (reduce transparency).
-
-### 6.3 Modal/overlay handling
-
-- Modals (pruning stats, etc.) should have **solid backgrounds** to avoid landscape confusion.
-- `z-index` hierarchy:
-  - Canvas landscape: -1 (behind everything).
-  - Dashboard content (cards, chart): 0–10.
-  - Modals: 1000 (solid background, opaque).
-  - Notifications: 2000 (floating).
-
----
-
-## 7. Mobile considerations
-
-### 7.1 Small screens (≤640px)
-
-**Challenge**: Landscape visual is proportionally too large; UI crowding makes transparency harmful.
-
-**Options**:
-1. **Hide landscape**: `display: none` on mobile. Saves rendering; dashboard works as-is.
-2. **Reduce opacity**: Increase transparency (e.g., card opacity 0.95 instead of 0.85) so landscape is barely visible, reducing visual clutter.
-3. **Adaptive sizing**: Render a simpler, smaller landscape (fewer trees, smaller mountains).
-
-**Recommendation**: Start with **option 2** (adaptive opacity). Test with users; if landscape becomes invisible, shift to option 1.
-
-### 7.2 Implementation
-
-```css
-@media (max-width: 640px) {
-  .panel {
-    /* increase opacity, reduce landscape visibility */
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(6px);
-  }
-}
-```
-
----
-
-## 8. Integration with existing code
-
-### 8.1 Files to modify
-
-| File | Change | Effort |
-|---|---|---|
-| **Index.html** | Add `<canvas id="trajectoryWeather">` as first element in body (before `.container`), z-index -1. | S |
-| **Styles.html** | Add canvas positioning rules, panel glassmorphism, card opacity rules, media queries. | S |
-| **JavaScript.html** | Add metric computation function (per-range), landscape renderer instantiation, range-filter click handlers to trigger smooth transition. | M |
-| **Code.js** | None (MVP). Reuse velocity_3d, velocity_14d already computed. | None |
-
-### 8.2 New files
-
-| File | Purpose |
+| File | Change |
 |---|---|
-| **TrajectoryWeatherLandscape.html** | (or inline in JavaScript.html) Renderer class, cloud drawing, sun drawing, metric-to-state mapping. Adapted from POC. |
+| **Index.html** | `<canvas id="trajectoryWeather">` as first body element. |
+| **Styles.html** | Canvas rules, C4 glassmorphism, media queries. |
+| **JavaScript.html** | Metric functions, `Landscape` renderer, range-click wiring. All inline. |
+| **Code.js** | Weighted ingestion, subtask columns, Top Overdue sheet, locking. Done. |
 
-### 8.3 Dependencies
+Port checklist from the POC: precompute the metric series once per data
+load, render per-row `weatherAt(ownMetric)`, port draw functions
+1:1 (ranges, treeline, pines, cabin, fire, clouds, sun/moon/stars),
+reuse the on-demand loop. Reference: `campsite-poc.html`.
 
-- Existing: `calculateVelocity()` function (already in JavaScript.html).
-- New: `calculateMetricPerRange(rows, baseline, rangeMs)` — compute metric for a given time range.
-- New: `LandscapeState` object — tracks current and target weather, animate transitions.
-
----
-
-## 9. Implementation phases
-
-### Phase 1 (MVP): Static landscape + range-relative metric
-
-- Canvas rendering (landscape, house, trees, static clouds).
-- Metric computation per range.
-- No animation yet; just snap weather state on range change.
-- **Goal**: Validate that the concept works, transparency looks good.
-- **Effort**: M (mostly rendering + metric wiring).
-
-### Phase 2: Smooth transitions
-
-- Animate weather state changes (color, opacity, spawn rate).
-- Continuous cloud drift.
-- Positive-event particles (optional for MVP).
-- **Effort**: S–M.
-
-### Phase 3: Polish
-
-- Landscape variations (time-of-day tint, seasonal color shifts).
-- Sound design (optional, e.g., gentle wind chime on state transition).
-- Accessibility audit (high-contrast mode, reduced-motion support).
-- **Effort**: S–M.
-
----
-
-## 10. Configuration constants
-
-All tunable parameters extracted to named constants:
+## 9. Tuning constants
 
 ```javascript
-const LANDSCAPE = {
-  BASELINE_WINDOW_DAYS: 14,           // stable reference for metric
-  METRIC_DISPLAY_WINDOW_DAYS: 30,     // used for "All" range
-  TRANSITION_DURATION_MS: 800,        // smooth state change animation
-  CLOUD_DRIFT_PX_PER_SEC: 35,        // right-to-left movement
-  LANDSCAPE_CANVAS_Z_INDEX: -1,
-  
-  HOUSE_POSITION: { x: 0.35, y: 0.62 },
-  HOUSE_WIDTH: 100,
-  HOUSE_HEIGHT: 120,
-  
-  GLASSMORPHISM: {
-    panel_opacity: 0.84,
-    panel_blur_px: 10,
-    control_opacity: 0.87,
-    control_blur_px: 8
-  }
-};
+BASELINE_WINDOW_DAYS: 14, METRIC_DISPLAY_WINDOW_DAYS: 30,
+TRANSITION_DURATION_S: 0.75, TRANSITION_FPS: 30,
+MOBILE_WIDTH: 768, MOBILE_DPR: 1.5, DESKTOP_DPR: 2,
+HOUSE_POSITION: { x: 0.16 }, HOUSE_WIDTH: 100, HOUSE_HEIGHT: 120,
+FIRE_POSITION: { x: 0.30 }, FIRE_SCALE: 0.8,
+SAFE_ZONES: [{ x: 0.16, r: 0.10 }, { x: 0.30, r: 0.08 }],
+SNOW_LINE: 0.70, CLOUD_CAP: 25
 ```
 
----
+## 10. Success criteria
 
-## 11. Success criteria
+- [x] Landscape visible without harming readability.
+- [x] Metric computation correct and immutable across reloads (Node suite:
+  stability, crisis/calm separation, range validity).
+- [x] Smooth transitions on range change (0.75s morph at 30fps, no snapping).
+- [x] Cabin, fire, trees visually cohesive.
+- [x] Cloud layouts gap-free and varied (Node suite: 100 seeds, core + rim).
+- [x] Daylight blend anchors match Sibiu sun times ±25 min (Node suite).
+- [ ] WCAG 2.0 AA contrast verified over live landscape.
+- [ ] Mobile usability verified (≤640px).
+- [ ] No jank during transitions (spot-check Performance panel).
 
-- [ ] Landscape is visible behind all dashboard elements without harming readability.
-- [ ] Metric computation is correct and immutable (same metric on reload).
-- [ ] Smooth transitions on range-filter changes (no snapping).
-- [ ] WCAG 2.0 AA contrast maintained for all text over transparent backgrounds.
-- [ ] Mobile experience is usable (landscape not distracting; opacity adjusted).
-- [ ] Performance: no jank during cloud drift or metric transitions (60 fps target).
-- [ ] House and trees are visually cohesive with the landscape (not cartoonish).
+## 11. Open questions
 
----
+1. **Sky tint by metric** (warmer when clear): deferred.
+2. **House interior light**: done (warm windows + night boost).
+3. **Seasonal color shifts**: deferred (only sun times shift today).
+4. **Sound**: never — a dashboard background stays silent.
+5. **Daily cycle**: ported to the dashboard (browser clock, always
+   auto). One frame per minute keeps the blend fresh; no slider.
 
-## 12. Open questions (to resolve during implementation)
+## 12. Notes
 
-1. **Sky color variation**: Should the sky tint shift based on metric (warmer in clear weather, cooler in storms)? Or keep it static for simplicity?
-2. **House interior light**: Should windows glow slightly? Adds visual interest but increases rendering cost.
-3. **Seasonal variation**: Should the landscape shift colors by month/season? Or keep it perpetually autumn?
-4. **Sound design**: Optional wind/chime sounds on weather transition? Consult user preferences (no forced audio).
-5. **Daily cycle**: Should the sky simulate time-of-day (dawn/dusk coloring)? Or static?
-
-**Recommendation**: Start with static (current design). Test with users; add variations in Phase 3 if they enhance rather than distract.
-
----
-
-## 13. Notes
-
-- **Metaphor alignment**: The landscape now responds to *your recent pace within the time window you're examining*. Narrower windows = more volatile weather. This aligns with the principle "the visualization reflects what matters to you right now."
-- **Non-punitive**: Widening the range view smoothly transitions to calmer weather (integrating noise). This is a feature, not a bug — it communicates that short-term noise is normal, long-term trends matter.
-- **Immutability via math**: Historical metrics are immutable because they depend only on past data, not current state. No storage of "committed" flags needed.
-- **Accessibility**: Glassmorphism requires careful contrast testing. Worst case, increase opacity until WCAG 2.0 AA passes; the landscape is context, not critical.
-
----
-
-## Appendix A: Implementation Notes
-
-### A.1 Metric computation (client-side, JavaScript.html)
-
-Add a new function `calculateMetricForRange(rows, rangeDays)` that:
-
-1. Computes `velocityBaseline` over the last 14 days (or all available history if < 14 days).
-2. Computes `velocityRecent` over `rangeDays` (passed as parameter).
-3. Returns the clamped metric: `clamp((velocityRecent / velocityBaseline - 0.85) / 0.3, 0, 1)`.
-
-**Pseudo-code:**
-```javascript
-function calculateMetricForRange(rows, rangeDays) {
-  const now = Date.now();
-  const baselineCutoff = now - 14 * 24 * 60 * 60 * 1000;
-  const rangeCutoff = now - rangeDays * 24 * 60 * 60 * 1000;
-  
-  // Sum positive deltas in baseline window
-  let baselineCompleted = 0;
-  for (let i = 1; i < rows.length; i++) {
-    const timestamp = new Date(rows[i][0]).getTime();
-    if (timestamp >= baselineCutoff) {
-      const delta = rows[i][2] - rows[i - 1][2];  // [2] = completed column
-      if (delta > 0) baselineCompleted += delta;
-    }
-  }
-  
-  // Sum positive deltas in range window
-  let rangeCompleted = 0;
-  for (let i = 1; i < rows.length; i++) {
-    const timestamp = new Date(rows[i][0]).getTime();
-    if (timestamp >= rangeCutoff) {
-      const delta = rows[i][2] - rows[i - 1][2];
-      if (delta > 0) rangeCompleted += delta;
-    }
-  }
-  
-  // Calculate velocities
-  const baselineHours = Math.max(1, (now - baselineCutoff) / (60 * 60 * 1000));
-  const rangeHours = Math.max(1, (now - rangeCutoff) / (60 * 60 * 1000));
-  const velocityBaseline = baselineCompleted / (baselineHours / 24);
-  const velocityRecent = rangeCompleted / (rangeHours / 24);
-  
-  // Compute metric
-  const trendRatio = velocityBaseline > 0 ? velocityRecent / velocityBaseline : 1.0;
-  const metric = Math.max(0, Math.min(1, (trendRatio - 0.85) / 0.3));
-  return metric;
-}
-```
-
-**Call site in setRangeFilter():**
-```javascript
-function setRangeFilter(range) {
-  activeRangeDays = (range === 'all') ? 30 : (Number(range) || 30);
-  const metric = calculateMetricForRange(rawData.rows, activeRangeDays);
-  LandscapeRenderer.setTargetMetric(metric);
-  // ... rest of existing logic
-}
-```
-
-### A.2 Landscape canvas layer
-
-**HTML in Index.html (first child of body):**
-```html
-<canvas id="trajectoryWeather" style="position:fixed; inset:0; z-index:-1;"></canvas>
-```
-
-**Initialization in JavaScript.html init():**
-```javascript
-const canvas = document.getElementById('trajectoryWeather');
-const ctx = canvas.getContext('2d');
-const dpr = Math.min(window.devicePixelRatio || 1, 2);
-let W = 0, H = 0;
-
-function resize() {
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width = W + 'px';
-  canvas.style.height = H + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawBackdrop();
-  drawForeground();
-}
-
-window.addEventListener('resize', resize);
-resize();
-```
-
-### A.3 Cloud positioning (timestamp-based)
-
-**Position derived from snapshot timestamp and current time:**
-```javascript
-function getCloudPosition(snapshot, now, activeRangeHours) {
-  const snapshotTime = new Date(snapshot[0]).getTime();  // [0] = timestamp
-  const ageHours = (now - snapshotTime) / (60 * 60 * 1000);
-  const effectiveWidth = W * 1.2;
-  const x = W - (ageHours / activeRangeHours) * effectiveWidth;
-  return x;
-}
-```
-
-**Render loop with cloud rendering:**
-```javascript
-function frame(ts) {
-  if (lastTs !== null) {
-    const dt = Math.min(0.05, (ts - lastTs) / 1000);
-    LandscapeRenderer.update(dt);
-    lastTs = ts;
-  } else {
-    lastTs = ts;
-  }
-  
-  const now = Date.now();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  ctx.drawImage(backdropCanvas, 0, 0, W, H);
-  
-  // Draw clouds
-  const activeRangeHours = activeRangeDays === 'all' ? 30 * 24 : activeRangeDays * 24;
-  if (rawData && rawData.rows) {
-    for (let i = 0; i < rawData.rows.length; i++) {
-      const x = getCloudPosition(rawData.rows[i], now, activeRangeHours);
-      if (x > -160 && x < W + 160) {
-        drawCloud(ctx, rawData.rows[i], x, LandscapeRenderer.currentMetric);
-      }
-    }
-  }
-  
-  drawSun(ctx, LandscapeRenderer.currentMetric);
-  ctx.drawImage(foregroundCanvas, 0, 0, W, H);
-  requestAnimationFrame(frame);
-}
-requestAnimationFrame(frame);
-```
-
-### A.4 Smooth state transitions
-
-**Weather state transition machine:**
-```javascript
-const LandscapeRenderer = {
-  currentMetric: 0.5,
-  targetMetric: 0.5,
-  transitionProgress: 1.0,
-  transitionDuration: 0.8,
-  
-  setTargetMetric: function(metric) {
-    if (Math.abs(this.targetMetric - metric) > 0.01) {
-      this.targetMetric = metric;
-      this.transitionProgress = 0.0;
-    }
-  },
-  
-  update: function(dt) {
-    if (this.transitionProgress < 1.0) {
-      this.transitionProgress = Math.min(1.0, this.transitionProgress + dt / this.transitionDuration);
-      this.currentMetric = lerp(this.currentMetric, this.targetMetric, this.transitionProgress);
-    }
-  }
-};
-```
-
-### A.5 C4 Glassmorphism CSS (Styles.html)
-
-```css
-.panel,
-.controls-toolbar,
-.danger-zone-panel {
-  background: rgba(240, 248, 255, 0.84);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(200, 220, 230, 0.3);
-  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
-}
-
-.card {
-  background: #ffffff;  /* solid white */
-}
-
-@media (max-width: 640px) {
-  .panel, .controls-toolbar, .danger-zone-panel {
-    background: rgba(240, 248, 255, 0.92);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-  }
-}
-```
-
-### A.6 Integration checklist
-
-- [ ] Add `calculateMetricForRange()` function.
-- [ ] Add `LandscapeRenderer` state machine.
-- [ ] Add `<canvas id="trajectoryWeather">` to Index.html.
-- [ ] Add landscape drawing functions (drawHouse, drawTree, drawBackdrop, drawForeground, drawCloud, drawSun).
-- [ ] Update `setRangeFilter()` to trigger metric recalculation.
-- [ ] Apply C4 glassmorphism CSS.
-- [ ] Test WCAG 2.0 AA contrast (#f0f8ff at 84% opacity over landscape).
-- [ ] Test mobile responsiveness (≤640px).
-- [ ] Verify 60 fps performance during cloud rendering and weather transitions.
-
+- **Metaphor alignment**: the landscape responds to recent pace within
+  the examined window — "what matters to you right now."
+- **Non-punitive**: widening the range calms the weather (integrating
+  noise). Short-term noise is normal; long-term trends matter.
+- **Testing visuals**: extract pure functions into Node (puff coverage
+  over 200 seeds, blend anchors, sun path, metric immutability);
+  `node --check` after every edit; puff-outline debug toggle.
