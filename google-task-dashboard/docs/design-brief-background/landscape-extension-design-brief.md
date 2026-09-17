@@ -96,9 +96,11 @@ math, no stored flags).
 
 ## 3. Transitions
 
-Range click → compute metric → set target → 0.75s lerp of all visual
-parameters → fall back to ambient tick. No state persists between
-changes. Per-frame cost during transitions is bounded (≤25 clouds).
+Range click → compute metric → set target → 0.75s lerp (capped 30fps)
+→ single exact final paint → idle (zero loop cost). Clouds swap visible
+sets instantly (history never rewrites); the sun opacity morphs. No
+state persists between changes. Per-frame cost during transitions is
+bounded (≤25 clouds).
 
 ## 4. Glassmorphism (C4: Cool Tint Less Blur)
 

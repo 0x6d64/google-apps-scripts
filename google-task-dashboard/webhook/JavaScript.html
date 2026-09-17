@@ -47,24 +47,14 @@
     const LANDSCAPE_MOBILE_WIDTH = 768; // below this, DPR is capped for fill-rate savings
     const LANDSCAPE_MOBILE_DPR = 1.5;
     const LANDSCAPE_DESKTOP_DPR = 2;
-    const LANDSCAPE_SNOW_LINE = 0.70; // ridge peaks above this get snow caps
+    const LANDSCAPE_CLOUD_CAP = 25; // max timeline clouds; oldest-first downsample, latest kept
+    const LANDSCAPE_RECENT_WINDOW_DAYS = 3; // per-snapshot metric numerator window
     const LANDSCAPE_GROUND_TOP = 0.78;
     const LANDSCAPE_CABIN = { x: 0.16, w: 110, h: 128 };
     const LANDSCAPE_FIRE = { x: 0.30, s: 0.8 };
     const LANDSCAPE_SAFE_ZONES = [
       { x: LANDSCAPE_CABIN.x, r: 0.10 },
       { x: LANDSCAPE_FIRE.x, r: 0.08 }
-    ];
-    // Band midpoints of the weather states above. Cloud appearance
-    // interpolates continuously between stops so range changes morph
-    // instead of snapping at threshold boundaries (design brief §3.1).
-    const LANDSCAPE_WEATHER_STOPS = [0.10, 0.30, 0.50, 0.69, 0.89];
-    const LANDSCAPE_WEATHER_STATES = [
-      { key: 'storm', color: '#3c4750', opacityMid: 0.72, sizeMid: 96, vxRange: [42, 56], spawnMs: [260, 440], rain: true },
-      { key: 'heavy', color: '#556169', opacityMid: 0.58, sizeMid: 74, vxRange: [34, 46], spawnMs: [520, 760], rain: true },
-      { key: 'steady', color: '#93a2a8', opacityMid: 0.40, sizeMid: 54, vxRange: [26, 36], spawnMs: [820, 1150], rain: false },
-      { key: 'clearing', color: '#d6e0e0', opacityMid: 0.20, sizeMid: 36, vxRange: [20, 28], spawnMs: [1500, 2100], rain: false },
-      { key: 'clear', color: '#f2f6f6', opacityMid: 0.07, sizeMid: 22, vxRange: [16, 22], spawnMs: [4200, 7000], rain: false }
     ];
 
     /**
@@ -128,47 +118,6 @@
       function pseudoRandom(seed) {
         const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
         return x - Math.floor(x);
-      }
-
-      function hexToRgb(hex) {
-        const v = parseInt(hex.replace('#', ''), 16);
-        return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
-      }
-      function rgbToCss(rgb, alpha) {
-        return 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',' + alpha + ')';
-      }
-
-      function rgbToHex(rgb) {
-        const h = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
-        return '#' + h(rgb.r) + h(rgb.g) + h(rgb.b);
-      }
-
-      /**
-       * Interpolates cloud appearance continuously across the metric range
-       * by blending adjacent weather stops. Any metric change — however
-       * small — produces visible motion instead of snapping at buckets.
-       * @param {number} metric - Health metric in [0, 1]
-       */
-      function weatherAt(metric) {
-        const m = clamp(metric, 0, 1);
-        let i = 0;
-        while (i < LANDSCAPE_WEATHER_STOPS.length - 2 && m > LANDSCAPE_WEATHER_STOPS[i + 1]) i++;
-        const lo = LANDSCAPE_WEATHER_STATES[i];
-        const hi = LANDSCAPE_WEATHER_STATES[i + 1];
-        const span = LANDSCAPE_WEATHER_STOPS[i + 1] - LANDSCAPE_WEATHER_STOPS[i];
-        const t = span > 0 ? clamp((m - LANDSCAPE_WEATHER_STOPS[i]) / span, 0, 1) : 0;
-        const loRgb = hexToRgb(lo.color);
-        const hiRgb = hexToRgb(hi.color);
-        return {
-          color: rgbToHex({
-            r: lerp(loRgb.r, hiRgb.r, t),
-            g: lerp(loRgb.g, hiRgb.g, t),
-            b: lerp(loRgb.b, hiRgb.b, t)
-          }),
-          opacityMid: lerp(lo.opacityMid, hi.opacityMid, t),
-          sizeMid: lerp(lo.sizeMid, hi.sizeMid, t),
-          rain: lerp(lo.rain ? 1 : 0, hi.rain ? 1 : 0, t) > 0.5
-        };
       }
 
       /**
@@ -540,36 +489,127 @@
         return W - (ageHours / state.activeRangeHours) * effectiveWidth;
       }
 
-      function drawCloud(c, x, y, size, opacity, colorHex, rain, time, seed) {
-        const bobAmp = rain ? 6 : 3;
-        const bobbedY = y + Math.sin(time * 0.5 + seed * 6.28) * bobAmp;
-        const rgb = hexToRgb(colorHex);
+      function css(c, a) {
+        return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+      }
 
+      // Seeded puff layouts: positions and aspect derived from the seed,
+      // never a fixed stamp. Bottom filler puffs straddle the rim.
+      function cloudPuffs(seed) {
+        const puffs = [];
+        const n = 6 + Math.floor(pseudoRandom(seed) * 3); // 6-8
+        for (let k = 0; k < n; k++) {
+          const t = n === 1 ? 0.5 : k / (n - 1);
+          const j1 = pseudoRandom(seed + k * 3.77), j2 = pseudoRandom(seed + k * 9.13);
+          puffs.push({
+            dx: (t - 0.5) * 1.55 * (0.85 + j1 * 0.3),       // in units of size
+            dy: -Math.sin(Math.PI * clamp(t, 0.02, 0.98)) * 0.34 * (0.8 + j2 * 0.4) + 0.06,
+            r: 0.34 + j2 * 0.14
+          });
+        }
+        puffs.push({ dx: -0.42 * (0.9 + pseudoRandom(seed + 51) * 0.2), dy: 0.16, r: 0.30 });
+        puffs.push({ dx: 0.44 * (0.9 + pseudoRandom(seed + 77) * 0.2), dy: 0.17, r: 0.32 });
+        puffs.push({ dx: (pseudoRandom(seed + 99) - 0.5) * 0.1, dy: 0.20, r: 0.30 });
+        return puffs;
+      }
+
+      // Stormy (0): flat blue-grey mass, dim tops. Healthy (1): bright,
+      // small, dry. Values stay near sky values; contrast lives in the
+      // lit top puffs, not in dark balls (dark-to-light order).
+      function cloudLook(metric) {
+        const t = clamp(metric, 0, 1);
+        const dark = [118, 130, 146], light = [255, 255, 255];
+        const darkCore = [208, 216, 226];
+        const mix = (a, b) => Math.round(a + (b - a) * t);
+        return {
+          base: [mix(dark[0], light[0]), mix(dark[1], light[1]), mix(dark[2], light[2])],
+          core: [mix(darkCore[0], light[0]), mix(darkCore[1], light[1]), mix(darkCore[2], light[2])],
+          sizeMul: 1.3 - 0.6 * t,
+          opacity: 0.95 - 0.15 * t,
+          rain: metric < 0.45
+        };
+      }
+
+      // Per-snapshot metric: trailing-3d velocity against a trailing-14d
+      // baseline, using only data up to the snapshot itself. Immutable by
+      // construction; precomputed once per data load.
+      function metricAt(rows, idx) {
+        const DAY = 86400000;
+        const t = new Date(rows[idx][0]).getTime();
+        const earliest = new Date(rows[0][0]).getTime();
+        const baselineDays = Math.min(14, Math.max(1, (t - earliest) / DAY));
+        const rate = (days) => {
+          const w = [];
+          for (let i = 0; i <= idx; i++) {
+            if (new Date(rows[i][0]).getTime() >= t - days * DAY) w.push(rows[i]);
+          }
+          if (w.length < 2) return null;
+          let total = 0;
+          for (let i = 1; i < w.length; i++) {
+            const d = w[i][2] - w[i - 1][2];
+            if (d > 0) total += d;
+          }
+          const elapsed = Math.max(1, new Date(w[w.length - 1][0]).getTime() - new Date(w[0][0]).getTime()) / DAY;
+          return total / elapsed;
+        };
+        const base = rate(baselineDays);
+        const recent = rate(LANDSCAPE_RECENT_WINDOW_DAYS);
+        if (base === null || base <= 0 || recent === null) return 0.5;
+        return clamp((recent / base - 0.85) / 0.3, 0, 1);
+      }
+
+      let metricSeries = []; // per-snapshot metrics aligned with rawData.rows
+      let snapshotTimes = []; // numeric timestamps aligned with rawData.rows
+
+      /**
+       * Precomputes per-snapshot timeline metrics for freshly loaded rows.
+       * Rows are ascending by time, so each trailing-window scan stays short.
+       */
+      function ingestSnapshots(rows) {
+        metricSeries = [];
+        snapshotTimes = [];
+        for (let i = 0; i < rows.length; i++) {
+          snapshotTimes.push(new Date(rows[i][0]).getTime());
+        }
+        for (let i = 0; i < rows.length; i++) {
+          metricSeries.push(metricAt(rows, i));
+        }
+      }
+
+      function drawCloud(c, x, y, size, seed, look) {
         c.save();
-        c.globalAlpha = opacity;
-        const grad = c.createRadialGradient(x, bobbedY, 0, x, bobbedY, size);
-        grad.addColorStop(0, rgbToCss(rgb, 1));
-        grad.addColorStop(1, rgbToCss(rgb, 0));
-        c.fillStyle = grad;
+        c.globalAlpha = look.opacity;
+        // 1. One flat shadow silhouette for the whole mass. Single fill, no
+        // per-puff shading — this is what kills the grey-grapes look.
+        const puffs = cloudPuffs(seed);
+        c.fillStyle = css(look.base, 0.9);
         c.beginPath();
-        c.arc(x, bobbedY, size * 0.55, 0, Math.PI * 2);
-        c.arc(x - size * 0.5, bobbedY + size * 0.12, size * 0.4, 0, Math.PI * 2);
-        c.arc(x + size * 0.5, bobbedY + size * 0.1, size * 0.42, 0, Math.PI * 2);
-        c.arc(x + size * 0.15, bobbedY - size * 0.22, size * 0.36, 0, Math.PI * 2);
+        c.ellipse(x, y + size * 0.05, size * 0.9, size * 0.34, 0, 0, Math.PI * 2);
+        for (const p of puffs) {
+          const px = x + p.dx * size, py = y + p.dy * size, pr = p.r * size * 1.1;
+          c.moveTo(px + pr, py);
+          c.arc(px, py, pr, 0, Math.PI * 2);
+        }
         c.fill();
-
-        // Only draw rain if cloud is mostly on-screen (avoid off-screen artifacts)
-        if (rain && opacity > 0.3 && x > -100 && x < W + 100) {
-          c.globalAlpha = opacity * 0.35;
-          c.strokeStyle = rgbToCss(rgb, 1);
-          c.lineWidth = 1.4;
+        // 2. A few small lights on the upper puffs only, biased to the sun
+        // side. Light lives on top; the base stays in shadow.
+        const tops = puffs.slice().sort((a, b) => a.dy - b.dy).slice(0, 3);
+        for (const p of tops) {
+          const px = x + (p.dx - 0.08) * size, py = y + (p.dy - 0.08) * size;
+          const pr = p.r * size * 0.8;
+          const g = c.createRadialGradient(px, py, 0, px, py, pr);
+          g.addColorStop(0, css(look.core, 0.9));
+          g.addColorStop(1, css(look.core, 0));
+          c.fillStyle = g;
+          c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill();
+        }
+        if (look.rain && x > -100 && x < W + 100) {
+          c.strokeStyle = 'rgba(120,140,160,0.55)';
+          c.lineWidth = 1.5;
           for (let k = 0; k < 4; k++) {
-            const rx = x - size * 0.4 + k * (size * 0.28);
-            const ry = bobbedY + size * 0.35;
-            c.beginPath();
-            c.moveTo(rx, ry);
-            c.lineTo(rx - 5, ry + 16);
-            c.stroke();
+            const rx = x - size * 0.4 + k * size * 0.27;
+            const ry = y + size * 0.38;
+            c.beginPath(); c.moveTo(rx, ry); c.lineTo(rx - 5, ry + 15); c.stroke();
           }
         }
         c.restore();
@@ -607,39 +647,35 @@
 
         drawSun(ctx, state.currentMetric, time);
 
-        const weather = weatherAt(state.currentMetric);
+        // Timeline clouds: pinned to snapshot age, each wearing its own
+        // immutable metric. Downsample oldest-first, always keep latest.
+        // History never rewrites on range change — only the visible set does.
         const now = Date.now();
-
         if (rawData && rawData.rows && rawData.rows.length > 0) {
-          // Limit the number of rendered clouds for wide historical ranges.
-          // This is visual downsampling only; rawData remains untouched.
-          const rows = downsampleData(
-            rawData.rows,
-            DOWNSAMPLE_TARGET_BUCKETS
-          );
+          const cutoff = now - state.activeRangeHours * 3600000;
+          let vis = [];
+          for (let i = 0; i < rawData.rows.length; i++) {
+            if (snapshotTimes[i] >= cutoff) vis.push(i);
+          }
+          if (vis.length > LANDSCAPE_CLOUD_CAP) {
+            const picked = [];
+            for (let k = 0; k < LANDSCAPE_CLOUD_CAP - 1; k++) {
+              picked.push(vis[Math.round(k * (vis.length - 1) / (LANDSCAPE_CLOUD_CAP - 2))]);
+            }
+            picked.push(vis[vis.length - 1]);
+            vis = picked;
+          }
 
-          for (let i = 0; i < rows.length; i++) {
-            const snapshotTime = new Date(rows[i][0]).getTime();
-            const x = getCloudPosition(snapshotTime, now);
+          for (let k = 0; k < vis.length; k++) {
+            const i = vis[k];
+            const x = getCloudPosition(snapshotTimes[i], now);
             if (x > -160 && x < W + 160) {
-              // Derive the seed from the snapshot itself rather than its row
-              // index. This keeps cloud properties stable when data changes
-              // and removes the linear X/Y correlation of the old hash.
-              const seed = pseudoRandom(snapshotTime);
-              const y = H * (0.08 + seed * 0.34);
-              const size = weather.sizeMid * (0.75 + seed * 0.5);
-              const opacity = weather.opacityMid * (0.7 + seed * 0.4);
-              drawCloud(
-                ctx,
-                x,
-                y,
-                size,
-                opacity,
-                weather.color,
-                weather.rain,
-                time,
-                seed
-              );
+              // Seed from the snapshot timestamp: stable across data changes.
+              const seed = snapshotTimes[i];
+              const y = H * (0.10 + pseudoRandom(seed) * 0.24);
+              const look = cloudLook(metricSeries[i]);
+              const size = 64 * look.sizeMul * (W / 1400 + 0.6);
+              drawCloud(ctx, x, y, size, seed, look);
             }
           }
         }
@@ -707,6 +743,7 @@
         init: init,
         setTargetMetric: setTargetMetric,
         setActiveRangeDays: setActiveRangeDays,
+        ingestSnapshots: ingestSnapshots,
         requestRender: requestRender
       };
     })();
@@ -1044,6 +1081,9 @@
 
       rawData = JSON.parse(JSON.stringify(data));
       hideStatus();
+
+      // Precompute per-snapshot timeline metrics once per data load.
+      Landscape.ingestSnapshots(rawData.rows || []);
 
       // Set sheet-fetch timestamp on every successful data load
       lastSheetFetchTime = Date.now();
