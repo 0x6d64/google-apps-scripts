@@ -96,6 +96,18 @@
     color: var(--text);
   }
 
+  /* Title block shares the panel glass so header text stays readable
+     over any sky, day or night. */
+  .header-title {
+    background: rgba(240, 248, 255, 0.84);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(200, 220, 230, 0.3);
+    border-radius: 12px;
+    padding: 12px 18px;
+    box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
+  }
+
   .subtitle {
     margin: 4px 0 0;
     color: var(--text-muted);
