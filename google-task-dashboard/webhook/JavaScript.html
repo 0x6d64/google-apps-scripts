@@ -47,7 +47,6 @@
     // interpolates continuously between stops so range changes morph
     // instead of snapping at threshold boundaries (design brief §3.1).
     const LANDSCAPE_WEATHER_STOPS = [0.10, 0.30, 0.50, 0.69, 0.89];
-    const LANDSCAPE_SNOW_LINE = 0.70; // ridge peaks above this get snow caps
     const LANDSCAPE_WEATHER_STATES = [
       { key: 'storm', color: '#3c4750', opacityMid: 0.72, sizeMid: 96, vxRange: [42, 56], spawnMs: [260, 440], rain: true },
       { key: 'heavy', color: '#556169', opacityMid: 0.58, sizeMid: 74, vxRange: [34, 46], spawnMs: [520, 760], rain: true },
@@ -89,7 +88,6 @@
       let dpr = 1;
       let W = 0, H = 0;
       let treeSeed = [];
-      let snowCaps = []; // normalized {nx, ny, nw, nh} snow triangles, drawn per-frame
       let grainTile = null;
       let lastFrameTs = null;
       let started = false;
@@ -203,75 +201,6 @@
         render(Date.now() / 1000);
       }
 
-      /**
-       * Deterministic 1D value noise (no dependencies). Produces organic
-       * ridgelines that stay identical across resizes.
-       */
-      function makeNoise1D(seed) {
-        const hash = (i) => {
-          const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
-          return x - Math.floor(x);
-        };
-        const fade = (t) => t * t * (3 - 2 * t);
-        return (x) => {
-          const i = Math.floor(x);
-          const t = fade(x - i);
-          return hash(i) * (1 - t) + hash(i + 1) * t;
-        };
-      }
-
-      const ridgeNoiseBack = makeNoise1D(7.3);
-      const ridgeNoiseFront = makeNoise1D(21.7);
-
-      function buildRidgeSeeds(count, noise, freq) {
-        const seeds = [];
-        for (let i = 0; i <= count; i++) {
-          const x = (i / count) * freq;
-          seeds.push(0.30 + 0.70 * (0.62 * noise(x) + 0.38 * noise(x * 2.63 + 5.2)));
-        }
-        return seeds;
-      }
-
-      // Layer offsets filled by mouse parallax (identity until then).
-      const viewShift = { bx: 0, by: 0 };
-
-      function backdropToScreen(nx, ny) {
-        return { x: nx * W + viewShift.bx, y: ny * H + viewShift.by };
-      }
-
-      function traceRidgeTop(c, seeds, baseY, amp) {
-        const step = W / (seeds.length - 1);
-        c.moveTo(0, baseY - seeds[0] * amp);
-        for (let i = 1; i < seeds.length; i++) {
-          const x = i * step;
-          const y = baseY - seeds[i] * amp;
-          const prevX = (i - 1) * step;
-          const prevY = baseY - seeds[i - 1] * amp;
-          const cx = (prevX + x) / 2;
-          c.quadraticCurveTo(prevX, prevY, cx, (prevY + y) / 2);
-        }
-        c.lineTo(W, baseY);
-      }
-
-      function drawRidge(c, seeds, baseY, amp, color, alpha, highlight) {
-        c.globalAlpha = alpha;
-        c.fillStyle = color;
-        c.beginPath();
-        c.moveTo(0, H);
-        traceRidgeTop(c, seeds, baseY, amp);
-        c.lineTo(W, H);
-        c.closePath();
-        c.fill();
-        if (highlight) {
-          c.strokeStyle = highlight;
-          c.lineWidth = 2;
-          c.beginPath();
-          traceRidgeTop(c, seeds, baseY, amp);
-          c.stroke();
-        }
-        c.globalAlpha = 1;
-      }
-
       function getGrainTile() {
         if (grainTile) return grainTile;
         grainTile = document.createElement('canvas');
@@ -300,28 +229,6 @@
         backdropCtx.fillStyle = sky;
         backdropCtx.fillRect(0, 0, W, H);
 
-        const seedsBack = buildRidgeSeeds(14, ridgeNoiseBack, 3.2);
-        drawRidge(backdropCtx, seedsBack, H * 0.66, H * 0.16, '#9fc0b8', 0.85, 'rgba(220,232,228,0.8)');
-
-        const seedsFront = buildRidgeSeeds(16, ridgeNoiseFront, 4.1);
-        drawRidge(backdropCtx, seedsFront, H * 0.72, H * 0.13, '#7fa39a', 1, 'rgba(200,216,210,0.9)');
-
-        // Snow caps on the back ridge, stored normalized for per-frame drawing.
-        snowCaps = [];
-        const stepBack = W / (seedsBack.length - 1);
-        for (let i = 0; i < seedsBack.length; i++) {
-          if (seedsBack[i] > LANDSCAPE_SNOW_LINE) {
-            const px = i * stepBack;
-            const py = H * 0.66 - seedsBack[i] * H * 0.16;
-            snowCaps.push({
-              nx: px / W,
-              ny: py / H,
-              nw: (stepBack * (0.55 + seedsBack[i] * 0.5)) / W,
-              nh: 0.16 * 0.22
-            });
-          }
-        }
-
         // Vignette to focus the centered content.
         const vig = backdropCtx.createRadialGradient(
           W / 2, H * 0.45, Math.min(W, H) * 0.35,
@@ -338,31 +245,6 @@
         backdropCtx.fillStyle = backdropCtx.createPattern(getGrainTile(), 'repeat');
         backdropCtx.fillRect(0, 0, W, H);
         backdropCtx.restore();
-      }
-
-      /**
-       * Draws snow caps with metric-driven opacity: heavier snow in storms,
-       * faint dusting when clear.
-       */
-      function drawSnowCaps(c, metric) {
-        if (snowCaps.length === 0) return;
-        const alpha = clamp((0.6 - metric) / 0.5, 0.12, 0.92);
-        c.save();
-        c.globalAlpha = alpha;
-        c.fillStyle = '#f4f8fa';
-        for (let i = 0; i < snowCaps.length; i++) {
-          const s = snowCaps[i];
-          const p = backdropToScreen(s.nx, s.ny);
-          const w = (s.nw * W) / 2;
-          const h = s.nh * H;
-          c.beginPath();
-          c.moveTo(p.x - w, p.y + h);
-          c.lineTo(p.x, p.y - 2);
-          c.lineTo(p.x + w, p.y + h);
-          c.closePath();
-          c.fill();
-        }
-        c.restore();
       }
 
       function drawTree(c, x, y, h, color) {
@@ -517,8 +399,6 @@
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, W, H);
         ctx.drawImage(backdropCanvas, 0, 0, W, H);
-
-        drawSnowCaps(ctx, state.currentMetric);
 
         drawSun(ctx, state.currentMetric, time);
 
