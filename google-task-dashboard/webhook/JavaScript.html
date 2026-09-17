@@ -2296,8 +2296,14 @@
       showStatus('Syncing tasks across all lists from Google Tasks API...', 'info');
 
       google.script.run
-        .withSuccessHandler((data) => {
+        .withSuccessHandler((result) => {
           setButtonsDisabled(false);
+          if (!result || !result.success) {
+            const errMsg = (result && result.error) || 'Unknown error';
+            showStatus('Sync failed: ' + errMsg, 'error');
+            return;
+          }
+          const data = result.data;
           showStatus('Sync completed successfully!', 'success');
           if (data && data.rows && data.rows.length > 0) {
             const latest = data.rows[data.rows.length - 1];
@@ -2394,16 +2400,16 @@
 
     function handleDownsampleLastYear() {
       const confirmed = confirm(
-        '⚠️ DOWNSAMPLE LAST YEAR TO 1/HOUR\n\n' +
-        'This will reduce snapshots from the last 365 days to at most 1 entry per rolling 60-minute window, keeping only the latest snapshot in each window.\n\n' +
-        'This permanently removes intra-hour data and cannot be undone.\n\n' +
+        '⚠️ DOWNSAMPLE LAST YEAR (AGE-BASED)\n\n' +
+        'This will reduce snapshots from the last 365 days with an age-based policy (latest wins): 1 entry per 30 minutes (0-3 days), per 60 minutes (3-7 days), per 3 hours (7-365 days).\n\n' +
+        'This permanently removes redundant snapshots and cannot be undone.\n\n' +
         'Data older than 1 year is not affected by this action.\n\n' +
         'Continue?'
       );
       if (!confirmed) return;
 
       setButtonsDisabled(true);
-      showStatus('Downsampling last year of snapshots to 1 per hour...', 'info');
+      showStatus('Downsampling last year of snapshots (age-based)...', 'info');
 
       google.script.run
         .withSuccessHandler((result) => {
@@ -2417,7 +2423,7 @@
 
           showDownsampleResultModal(result);
           showStatus('Downsampling complete. Refreshing dashboard...', 'success');
-          showNotification(`Removed ${result.totalRemoved} rows\nReduced to 1/hour`, '📉', 'success', 4000);
+          showNotification(`Removed ${result.totalRemoved} rows\nAge-based downsample`, '📉', 'success', 4000);
           refreshDashboardData();
         })
         .withFailureHandler((err) => {
@@ -2511,13 +2517,11 @@
       const btnSync = document.getElementById('btnSyncNow');
       const btnReload = document.getElementById('btnReloadData');
       const btnDeleteOld = document.getElementById('btnDeleteOldCompleted');
-      const btnClear = document.getElementById('btnSyncClear');
       const btnDownsample = document.getElementById('btnDownsampleLastYear');
       const btnPrune = document.getElementById('btnPruneOldData');
       if (btnSync) btnSync.disabled = disabled;
       if (btnReload) btnReload.disabled = disabled;
       if (btnDeleteOld) btnDeleteOld.disabled = disabled;
-      if (btnClear) btnClear.disabled = disabled;
       if (btnDownsample) btnDownsample.disabled = disabled;
       if (btnPrune) btnPrune.disabled = disabled;
     }
