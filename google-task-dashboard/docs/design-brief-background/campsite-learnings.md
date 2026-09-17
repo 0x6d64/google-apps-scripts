@@ -15,9 +15,10 @@ structurally impossible instead of unlikely.
 
 1. **Varied silhouettes**: derive puff count, positions, and aspect from the
    seed. Fixed layouts read as stamps even when size and opacity vary.
-2. **A dissolving base mass**: one ellipse under the puffs guarantees
-   coverage, but its gradient must fade to transparent at the rim, or the
-   bottom shows as a solid "naked" skirt.
+2. **No solid base shape**: an ellipse mass reads as its own silhouette
+   shining through. Use only a faint edgeless underlay for body, and let
+   enlarged soft-falloff puffs (1.18x, gentler mid-stop) form the cloud by
+   union.
 3. **Bottom filler puffs**: two to three low puffs straddling the rim. Our
    coverage test caught a middle-bottom gap the base mass hid — test the
    rim band explicitly, not just the core.
@@ -100,6 +101,48 @@ cropped away on narrow screens.
 
 Dragging the time slider unchecks auto mode. Manual override always wins
 over automation; re-checking auto resumes the live clock.
+
+## Timeline clouds
+
+Clouds are pinned to snapshot age (right = now), fully static, wearing
+their own immutable metric — this finally implements brief §2, which the
+dashboard only approximates (it paints every cloud with the current
+metric). Recipe: seeded synthetic history (weekday rhythm + scripted
+crisis bursts, `genHistory(now)` takes an injectable clock for tests),
+per-snapshot trailing-3d vs trailing-14d velocity ratio using only data
+up to that snapshot, range pills (1D/7D/30D) changing only the visible
+set (metrics never rewrite history), downsample oldest-first capped at
+25 while always keeping latest, no markers or rings on the newest cloud. Stormy = dark, large, rainy via `cloudLook()`; healthy = bright,
+small, dry. Verified in Node: determinism, recompute-stability, crisis
+bursts scoring < 0.35 against a calm median of ~1.0. Port-back checklist
+for `JavaScript.html`: precompute the metric series once per data load,
+then render per-row `weatherAt(ownMetric)` instead of one shared state.
+
+## Storm clouds are flat, blue, and lined
+
+Research consensus (Earp, Tuts+, OutdoorPainter): storm masses are dark
+underneath with light only on top; per-puff bright centers read as
+metallic grapes. Implementation: one flat shadow silhouette for the
+whole mass (single fill, values kept near sky values), then a few small
+lights on the upper puffs biased to the sun side — dark-to-light order.
+
+## Depth order: sky first, light last
+
+Moon and stars render before the cloud loop so weather passes in front
+of them — a luminous disc in front of clouds reads instantly wrong.
+They sit under the night wash with everything else (consistent dimming);
+stars get a modest alpha boost to survive it. Conversely, true light
+sources (flames, sparks, glow, window boosts) render after all
+overlays, undimmed. Rule of thumb: anything that emits light punches
+through the night; everything else takes the tint.
+
+## Sun path and spacing invariants
+
+The sun travels east-to-west and touches the horizon at rise/set (disc
+edge reaching the far-ridge zone, verified geometrically). Foreground
+pines use min-spacing rejection sampling so canopies cannot merge —
+bigger trees made collisions likely, spacing made them impossible.
+No "now" marker and no newest-cloud ring: extra chrome fights the calm.
 
 ## Deferred, not rejected
 

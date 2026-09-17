@@ -22,6 +22,11 @@
 <div id="panel">
   <label>Fire intensity <input type="range" id="fire" min="0" max="100" value="55"></label>
   <label><input type="checkbox" id="debug"> Puff outlines (cloud debug)</label>
+  <div>Range:
+    <button data-range="1" aria-pressed="false">1D</button>
+    <button data-range="7" aria-pressed="false">7D</button>
+    <button data-range="30" aria-pressed="true">30D</button>
+  </div>
   <label><input type="checkbox" id="autoTime" checked> Auto time (live)</label>
   <label>Time <input type="range" id="timeSlider" min="0" max="1439" value="780"> <span id="timeLabel">13:00</span></label>
   <div>FPS: <span id="fps">-</span></div>
@@ -53,6 +58,14 @@
   window.addEventListener('resize', resize);
   // Dragging the time slider takes over from auto mode.
   timeSlider.addEventListener('input', () => { autoTimeBox.checked = false; });
+  document.querySelectorAll('#panel [data-range]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      timelineDays = Number(btn.getAttribute('data-range')) || 30;
+      document.querySelectorAll('#panel [data-range]').forEach((b) => {
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+      });
+    });
+  });
   resize();
 
   // Deterministic hash for stable per-object variation.
@@ -560,15 +573,75 @@
   }
 
   // ------------------------------------------------------------------ clouds
-  // Seeded puff layouts: 6-8 puffs on an arc + a solid base ellipse mass,
-  // so unions cannot gap (the "hole" in the old 4-puff stamp).
-  const CLOUDS = [];
-  for (let i = 0; i < 5; i++) {
-    CLOUDS.push({
-      bx: prand(i * 3.7), by: 0.10 + prand(i * 9.1) * 0.26,
-      s: 0.7 + prand(i * 5.3) * 0.7, speed: 8 + prand(i * 1.3) * 10,
-      seed: 10 + i * 17.31
-    });
+  // Timeline clouds: each cloud is pinned to its snapshot timestamp
+  // (right = now) and wears that snapshot's own immutable metric.
+  // Synthetic stand-in for sheet snapshots: [t, open, completed, overdue,
+  // severity]. Deterministic: identical series on every reload.
+  function genHistory(now) {
+    now = now || Date.now();
+    const rows = [];
+    const STEP = 8 * 3600000;
+    const N = 93; // ~31 days at 3 snapshots/day
+    let open = 24, completed = 120;
+    for (let i = 0; i < N; i++) {
+      const t = now - (N - 1 - i) * STEP;
+      const day = new Date(t).getDay();
+      const ageDays = (N - 1 - i) / 3;
+      const weekend = (day === 0 || day === 6);
+      const crisis = (ageDays > 20.5 && ageDays < 22.5) || (ageDays > 5 && ageDays < 6.5);
+      const done = crisis ? 0 : (weekend ? (prand(i * 1.3) < 0.3 ? 1 : 0) : 1 + Math.floor(prand(i * 1.3) * 2));
+      const added = 1 + Math.floor(prand(i * 2.9) * 2);
+      completed += done;
+      open = Math.max(4, open + added - done);
+      const overdue = crisis ? 8 + Math.floor(prand(i * 4.1) * 5) : Math.floor(prand(i * 7.7) * 3);
+      rows.push([t, open, completed, overdue, overdue * 1.5]);
+    }
+    return rows;
+  }
+  // Per-snapshot metric, product formula: trailing-3d velocity against a
+  // trailing-14d baseline, using only data up to the snapshot itself.
+  function metricAt(rows, idx) {
+    const DAY = 86400000;
+    const t = rows[idx][0];
+    const baselineDays = Math.min(14, Math.max(1, (t - rows[0][0]) / DAY));
+    const rate = (days) => {
+      const w = rows.slice(0, idx + 1).filter((r) => r[0] >= t - days * DAY);
+      if (w.length < 2) return null;
+      let total = 0;
+      for (let i = 1; i < w.length; i++) {
+        const d = w[i][2] - w[i - 1][2];
+        if (d > 0) total += d;
+      }
+      const elapsed = Math.max(1, w[w.length - 1][0] - w[0][0]) / DAY;
+      return total / elapsed;
+    };
+    const base = rate(baselineDays);
+    const recent = rate(3);
+    if (base === null || base <= 0 || recent === null) return 0.5;
+    return clamp((recent / base - 0.85) / 0.3, 0, 1);
+  }
+  const HISTORY = genHistory();
+  for (let i = 0; i < HISTORY.length; i++) HISTORY[i].push(metricAt(HISTORY, i));
+  let timelineDays = 30;
+  function css(c, a) {
+    return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+  }
+  // Stormy (0): flat blue-grey mass, dim tops. Healthy (1): bright,
+  // small, dry. Values stay near sky values; contrast lives in the
+  // lit top puffs, not in dark balls (painterly dark-to-light order).
+  function cloudLook(metric) {
+    const t = clamp(metric, 0, 1);
+    const dark = [118, 130, 146], light = [255, 255, 255];
+    const darkCore = [208, 216, 226];
+    const mix = (a, b) => Math.round(a + (b - a) * t);
+    return {
+      base: [mix(dark[0], light[0]), mix(dark[1], light[1]), mix(dark[2], light[2])],
+      core: [mix(darkCore[0], light[0]), mix(darkCore[1], light[1]), mix(darkCore[2], light[2])],
+      lining: clamp((0.55 - metric) / 0.55, 0, 1),
+      sizeMul: 1.3 - 0.6 * t,
+      opacity: 0.95 - 0.15 * t,
+      rain: metric < 0.45
+    };
   }
   function cloudPuffs(seed) {
     const puffs = [];
@@ -588,40 +661,83 @@
     puffs.push({ dx: (prand(seed + 99) - 0.5) * 0.1, dy: 0.20, r: 0.30 });
     return puffs;
   }
-  function drawCloud(x, y, size, seed, time, debug) {
-    const bob = Math.sin(time * 0.5 + seed) * 3;
-    y += bob;
-    // Base mass: guarantees coverage under every layout, dissolving
-    // toward the bottom rim instead of ending in a solid edge.
-    const baseG = ctx.createLinearGradient(0, y - size * 0.4, 0, y + size * 0.35);
-    baseG.addColorStop(0, 'rgba(255,255,255,0.95)');
-    baseG.addColorStop(0.7, 'rgba(240,244,246,0.8)');
-    baseG.addColorStop(1, 'rgba(235,240,243,0)');
-    ctx.fillStyle = baseG;
-    ctx.beginPath();
-    ctx.ellipse(x, y + size * 0.05, size * 0.85, size * 0.34, 0, 0, Math.PI * 2);
-    ctx.fill();
-    // Puffs.
+  function drawCloud(x, y, size, seed, look, debug) {
+    ctx.save();
+    ctx.globalAlpha = look.opacity;
+    // 1. One flat shadow silhouette for the whole mass. Single fill, no
+    // per-puff shading — this is what kills the grey-grapes look.
     const puffs = cloudPuffs(seed);
+    ctx.fillStyle = css(look.base, 0.9);
+    ctx.beginPath();
+    ctx.ellipse(x, y + size * 0.05, size * 0.9, size * 0.34, 0, 0, Math.PI * 2);
     for (const p of puffs) {
-      const px = x + p.dx * size, py = y + p.dy * size, pr = p.r * size;
-      const g = ctx.createRadialGradient(px, py - pr * 0.25, 0, px, py, pr);
-      g.addColorStop(0, 'rgba(255,255,255,0.95)');
-      g.addColorStop(0.7, 'rgba(240,244,246,0.75)');
-      g.addColorStop(1, 'rgba(235,240,243,0)');
+      const px = x + p.dx * size, py = y + p.dy * size, pr = p.r * size * 1.1;
+      ctx.moveTo(px + pr, py);
+      ctx.arc(px, py, pr, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    // 2. A few small lights on the upper puffs only, biased to the sun
+    // side. Light lives on top; the base stays in shadow.
+    const tops = puffs.slice().sort((a, b) => a.dy - b.dy).slice(0, 3);
+    for (const p of tops) {
+      const px = x + (p.dx - 0.08) * size, py = y + (p.dy - 0.08) * size;
+      const pr = p.r * size * 0.8;
+      const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
+      g.addColorStop(0, css(look.core, 0.9));
+      g.addColorStop(1, css(look.core, 0));
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
       if (debug) {
         ctx.strokeStyle = 'rgba(220,40,40,0.8)';
         ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x + p.dx * size, y + p.dy * size, p.r * size * 1.18, 0, Math.PI * 2); ctx.stroke();
       }
     }
+    if (look.rain) {
+      ctx.strokeStyle = 'rgba(120,140,160,0.55)';
+      ctx.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        const rx = x - size * 0.4 + k * size * 0.27;
+        const ry = y + size * 0.38;
+        ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx - 5, ry + 15); ctx.stroke();
+      }
+    }
+    ctx.restore();
     if (debug) {
       ctx.strokeStyle = 'rgba(220,40,40,0.8)';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.ellipse(x, y + size * 0.05, size * 0.85, size * 0.34, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, y + size * 0.05, size * 0.9, size * 0.38, 0, 0, Math.PI * 2);
       ctx.stroke();
+    }
+  }
+
+  // Timeline rendering: pinned x from snapshot age, look from the
+  // snapshot's own metric. Downsamples oldest-first, always keeps latest.
+  function drawTimelineClouds(debug) {
+    const now = Date.now();
+    const cutoff = now - timelineDays * 86400000;
+    let vis = HISTORY.filter((r) => r[0] >= cutoff);
+    const MAXC = 25;
+    if (vis.length > MAXC) {
+      const latest = vis[vis.length - 1];
+      const rest = vis.slice(0, vis.length - 1);
+      const picked = [];
+      for (let k = 0; k < MAXC - 1; k++) {
+        picked.push(rest[Math.round(k * (rest.length - 1) / (MAXC - 2))]);
+      }
+      vis = picked.concat([latest]);
+    }
+    const L = 40, R = W - 40;
+    for (let i = 0; i < vis.length; i++) {
+      const r = vis[i];
+      const ageH = (now - r[0]) / 3600000;
+      const x = R - (ageH / (timelineDays * 24)) * (R - L);
+      const look = cloudLook(r[5]);
+      const seed = 10 + i * 17.31;
+      const y = H * (0.10 + prand(seed) * 0.24);
+      const size = 64 * look.sizeMul * (W / 1400 + 0.6);
+      drawCloud(x, y, size, seed, look, debug);
     }
   }
 
@@ -679,12 +795,13 @@
     drawPines(groundTop, shade, rim);
     const cabinInfo = drawCabin(groundTop, shade, rim);
 
-    // Clouds drift slowly; wrap with margin.
-    for (const c of CLOUDS) {
-      const span = W + 560;
-      const x = ((c.bx * span + time * c.speed) % span + span) % span - 280;
-      drawCloud(x, c.by * H, 64 * c.s * (W / 1400 + 0.6), c.seed, time, debug);
-    }
+    // Moon and stars live in the sky, behind the clouds. Star alpha is
+    // boosted to survive the night wash applied later.
+    drawMoon(nightF);
+    drawStars(Math.min(1, nightF * (1 - blend.dusk * 0.4) * 1.6), time);
+
+    // Timeline clouds: pinned to snapshot age, look from own metric.
+    drawTimelineClouds(debug);
 
     // Campfire base + smoke (dimmed by the overlays below like the rest).
     const fx = FIRE.x * W, fy = groundTop + 26;
@@ -716,8 +833,6 @@
       ctx.fillStyle = 'rgba(8,16,52,' + (0.62 * nightF).toFixed(3) + ')';
       ctx.fillRect(0, 0, W, H);
     }
-    drawStars(nightF * (1 - blend.dusk * 0.4), time);
-    drawMoon(nightF);
     drawWindowBoost(cabinInfo.windows, nightF);
 
     // Flames, sparks, and glow punch through the night undimmed.
