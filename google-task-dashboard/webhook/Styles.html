@@ -64,6 +64,15 @@
     display: block;
   }
 
+  /* Fire overlay: tiny canvas over the campfire only, positioned by JS.
+     DOM order paints it above the landscape canvas, still behind content. */
+  #trajectoryFire {
+    position: fixed;
+    z-index: -1;
+    display: block;
+    pointer-events: none;
+  }
+
   .container {
     max-width: 1140px;
     margin: 0 auto;

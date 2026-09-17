@@ -49,6 +49,19 @@
     const LANDSCAPE_DESKTOP_DPR = 2;
     const LANDSCAPE_CLOUD_CAP = 25; // max timeline clouds; oldest-first downsample, latest kept
     const LANDSCAPE_RECENT_WINDOW_DAYS = 3; // per-snapshot metric numerator window
+    const LANDSCAPE_SLOW_REFRESH_MS = 60000; // re-evaluate daylight/cloud ages when idle
+    const LANDSCAPE_MOON = { x: 0.24, y: 0.16 }; // own slot, never overlaps the sun path
+    // Fire overlay: dedicated tiny canvas over the campfire only, so flames
+    // can animate cheaply while the main scene stays on-demand.
+    const LANDSCAPE_FIRE_OVERLAY_W = 240;
+    const LANDSCAPE_FIRE_OVERLAY_H = 320;
+    // Fire point sits 120px above the overlay bottom so the ground glow
+    // (radius ~107px worst case: night boost + flicker peak) never clips
+    // into a hard edge.
+    const LANDSCAPE_FIRE_ANCHOR_DY = 120;
+    const LANDSCAPE_FIRE_FPS = 12;
+    const LANDSCAPE_FIRE_FLAMES = 14;
+    const LANDSCAPE_FIRE_SPARKS = 8;
     const LANDSCAPE_GROUND_TOP = 0.78;
     const LANDSCAPE_CABIN = { x: 0.16, w: 110, h: 128 };
     const LANDSCAPE_FIRE = { x: 0.30, s: 0.8 };
@@ -95,6 +108,8 @@
       let lastPaintTs = 0;
       let started = false;
       let rafRunning = false;
+      let fireCanvas = null, fireCtx = null;
+      let fireRunning = false, fireLastPaint = 0;
 
       const REDUCED_MOTION = !!(window.matchMedia &&
         window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -109,6 +124,43 @@
 
       function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
       function lerp(a, b, t) { return a + (b - a) * t; }
+      function smoothstep(a, b, x) {
+        const t = clamp((x - a) / (b - a), 0, 1);
+        return t * t * (3 - 2 * t);
+      }
+
+      // ---------------------------------------------------------------- daylight
+      // Sibiu, Romania (45.8N): fixed base hours + sinusoidal seasonal shift.
+      // Summer solstice -> ~05:34/21:00, winter -> ~08:10/16:36 (±20 min;
+      // dawn/dusk windows are 60-75 min wide). Product seam: replace the
+      // internals with the sunrise equation once real lat/lon exists.
+      function sunTimes(dayOfYear) {
+        const w = 2 * Math.PI * (dayOfYear - 172) / 365;
+        return {
+          rise: 6 + 52 / 60 - (78 / 60) * Math.cos(w),
+          set: 18 + 48 / 60 + (132 / 60) * Math.cos(w)
+        };
+      }
+      function dayBlendForDate(date) {
+        const start = new Date(date.getFullYear(), 0, 0);
+        const doy = Math.floor((date - start) / 86400000);
+        const { rise, set } = sunTimes(doy);
+        const h = date.getHours() + date.getMinutes() / 60;
+        const day = smoothstep(rise - 0.75, rise + 0.5, h) *
+          (1 - smoothstep(set - 0.5, set + 0.75, h));
+        const nearest = Math.min(Math.abs(h - rise), Math.abs(h - set));
+        const dusk = clamp(1 - nearest / 1.2, 0, 1);
+        return { day: day, dusk: dusk, h: h, rise: rise, set: set };
+      }
+      const sunPos = { x: 0.78, y: 0.20 }; // updated per frame from time of day
+      // Sun travels east->west and touches the horizon at rise/set.
+      // Returns day progress p (0 at sunrise, 1 at sunset) for shadow length.
+      function updateSunPos(h, rise, set) {
+        const p = clamp((h - rise) / Math.max(0.5, set - rise), 0, 1);
+        sunPos.x = 0.18 + 0.64 * p;
+        sunPos.y = 0.62 - Math.sin(Math.PI * p) * 0.49;
+        return p;
+      }
 
       /**
        * Deterministic pseudo-random hash for decorrelating cloud properties.
@@ -167,6 +219,7 @@
 
         drawBackdrop();
         drawForeground();
+        layoutFireOverlay();
         render(Date.now() / 1000);
       }
 
@@ -332,9 +385,16 @@
         c.fillRect(0, y0 + 28, W, H);
       }
 
-      function drawTree(c, x, y, h, dark) {
-        c.fillStyle = dark ? '#2f4a30' : '#3f5f3a';
+      function drawTree(c, x, y, h, dark, shade, rim) {
         const w = h * 0.55;
+        // Long soft shadow away from a low sun (colored, never black).
+        if (shade && shade.alpha > 0.01) {
+          c.fillStyle = 'rgba(20,26,40,' + (0.20 * shade.alpha).toFixed(3) + ')';
+          c.beginPath();
+          c.ellipse(x + shade.dx * h, y + 6, h * 0.45, 8, 0, 0, Math.PI * 2);
+          c.fill();
+        }
+        c.fillStyle = dark ? '#2f4a30' : '#3f5f3a';
         c.beginPath();
         c.moveTo(x, y - h);
         c.lineTo(x - w * 0.5, y - h * 0.35);
@@ -358,13 +418,30 @@
         c.lineTo(x + w * 0.12, y - h * 0.62);
         c.closePath();
         c.fill();
+        // Warm rim on the sun-facing sliver at dusk.
+        if (rim > 0.02) {
+          c.fillStyle = 'rgba(255,170,90,' + (0.55 * rim).toFixed(3) + ')';
+          c.beginPath();
+          c.moveTo(x, y - h);
+          c.lineTo(x + w * 0.5, y - h * 0.35);
+          c.lineTo(x + w * 0.32, y - h * 0.35);
+          c.lineTo(x + w * 0.12, y - h * 0.62);
+          c.closePath();
+          c.fill();
+        }
         c.fillStyle = 'rgba(0,0,0,.18)';
         c.fillRect(x - 3, y + h * 0.42, 6, h * 0.12);
       }
 
-      function drawHouse(c, x, y, w, h) {
+      function drawHouse(c, x, y, w, h, shade, rim) {
         c.fillStyle = 'rgba(0,0,0,0.15)';
         c.beginPath(); c.ellipse(x, y + 6, w * 0.75, 10, 0, 0, Math.PI * 2); c.fill();
+        if (shade && shade.alpha > 0.01) {
+          c.fillStyle = 'rgba(20,26,40,' + (0.20 * shade.alpha).toFixed(3) + ')';
+          c.beginPath();
+          c.ellipse(x + shade.dx * h * 0.9, y + 6, w * 0.85, 11, 0, 0, Math.PI * 2);
+          c.fill();
+        }
         c.fillStyle = '#5a7a6e';
         c.fillRect(x - w / 2, y - h * 0.55, w, h * 0.55);
         // Log lines.
@@ -388,6 +465,16 @@
         c.lineTo(x + w / 2 - 12, y - h * 0.55);
         c.lineTo(x, y - h * 0.86);
         c.closePath(); c.fill();
+        // Warm rim along the roof ridge at dusk.
+        if (rim > 0.02) {
+          c.strokeStyle = 'rgba(255,170,90,' + (0.5 * rim).toFixed(3) + ')';
+          c.lineWidth = 3;
+          c.beginPath();
+          c.moveTo(x - w / 2 - 10, y - h * 0.55);
+          c.lineTo(x, y - h * 1.02);
+          c.lineTo(x + w / 2 + 10, y - h * 0.55);
+          c.stroke();
+        }
         // Door + warm windows.
         c.fillStyle = '#3d4a47';
         c.fillRect(x - 15, y - 42, 30, 42);
@@ -407,6 +494,7 @@
             { x: x + w / 2 - 38, y: y - h * 0.36, w: 22, h: 22 }
           ]
         };
+        return houseChimney;
       }
 
       // Campfire static base: stone ring + crossed logs (flames arrive in stage 4).
@@ -466,21 +554,30 @@
         foregroundCtx.fillRect(0, groundTop, W, H - groundTop);
 
         drawTreeline(foregroundCtx);
+      }
 
+      // Foreground actors drawn per frame (they take time-of-day light).
+      function drawPinesGround(shade, rim) {
+        const groundTop = H * LANDSCAPE_GROUND_TOP;
         for (const p of PINES) {
           if (inSafeZone(p.x)) continue; // keep cabin + campfire clearing open
-          drawTree(foregroundCtx, p.x * W, groundTop + 8, 64 * p.s, p.dark);
+          drawTree(ctx, p.x * W, groundTop + 8, 64 * p.s, p.dark, shade, rim);
         }
+      }
 
-        drawHouse(foregroundCtx, LANDSCAPE_CABIN.x * W, groundTop + 8,
-          LANDSCAPE_CABIN.w, LANDSCAPE_CABIN.h);
+      function drawCabinGround(shade, rim) {
+        const groundTop = H * LANDSCAPE_GROUND_TOP;
+        return drawHouse(ctx, LANDSCAPE_CABIN.x * W, groundTop + 8,
+          LANDSCAPE_CABIN.w, LANDSCAPE_CABIN.h, shade, rim);
+      }
 
-        // Campfire static base, scaled to stay subordinate.
-        foregroundCtx.save();
-        foregroundCtx.translate(LANDSCAPE_FIRE.x * W, groundTop + 26);
-        foregroundCtx.scale(LANDSCAPE_FIRE.s, LANDSCAPE_FIRE.s);
-        drawFireBase(foregroundCtx, 0, 0);
-        foregroundCtx.restore();
+      function drawFireBaseGround() {
+        const groundTop = H * LANDSCAPE_GROUND_TOP;
+        ctx.save();
+        ctx.translate(LANDSCAPE_FIRE.x * W, groundTop + 26);
+        ctx.scale(LANDSCAPE_FIRE.s, LANDSCAPE_FIRE.s);
+        drawFireBase(ctx, 0, 0);
+        ctx.restore();
       }
 
       function getCloudPosition(snapshotTimestamp, now) {
@@ -615,16 +712,68 @@
         c.restore();
       }
 
-      function drawSun(c, metric, time) {
-        const x = W * 0.78;
-        const y = H * 0.20;
+      // Night disc + glow in its own slot. Rendered before the cloud
+      // loop so weather passes in front.
+      function drawMoon(c, alpha) {
+        if (alpha < 0.02) return;
+        const x = LANDSCAPE_MOON.x * W, y = LANDSCAPE_MOON.y * H;
+        const r = Math.min(W, H) * 0.038;
+        c.save();
+        c.globalAlpha = alpha;
+        const glow = c.createRadialGradient(x, y, 0, x, y, r * 3);
+        glow.addColorStop(0, 'rgba(220,228,245,0.5)');
+        glow.addColorStop(1, 'rgba(220,228,245,0)');
+        c.fillStyle = glow;
+        c.beginPath(); c.arc(x, y, r * 3, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#e8ecf4';
+        c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+        c.fillStyle = 'rgba(160,170,190,0.6)';
+        c.beginPath(); c.arc(x - r * 0.3, y - r * 0.2, r * 0.18, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.arc(x + r * 0.25, y + r * 0.3, r * 0.13, 0, Math.PI * 2); c.fill();
+        c.restore();
+      }
+
+      // Seeded static star field, faded in by night factor (alpha boosted
+      // to survive the night wash applied later).
+      const STARS = [];
+      for (let i = 0; i < 90; i++) {
+        STARS.push({ x: pseudoRandom(i * 2.17), y: pseudoRandom(i * 5.71) * 0.62, r: 0.6 + pseudoRandom(i * 8.3) * 1.3 });
+      }
+      function drawStars(c, alpha, time) {
+        if (alpha < 0.02) return;
+        c.save();
+        c.fillStyle = '#ffffff';
+        for (const s of STARS) {
+          const tw = 0.55 + 0.45 * Math.sin(time * 1.7 + s.x * 40);
+          c.globalAlpha = alpha * tw;
+          c.beginPath(); c.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2); c.fill();
+        }
+        c.restore();
+      }
+
+      // Extra window glow after the night tint so the cabin stays cozy.
+      function drawWindowBoost(c, windows, alpha) {
+        if (!windows || alpha < 0.02) return;
+        c.save();
+        for (const r of windows) {
+          const g = c.createRadialGradient(
+            r.x + r.w / 2, r.y + r.h / 2, 0, r.x + r.w / 2, r.y + r.h / 2, r.w * 1.6
+          );
+          g.addColorStop(0, 'rgba(255,205,110,' + (0.55 * alpha).toFixed(3) + ')');
+          g.addColorStop(1, 'rgba(255,180,80,0)');
+          c.fillStyle = g;
+          c.fillRect(r.x - r.w, r.y - r.h, r.w * 3, r.h * 3);
+        }
+        c.restore();
+      }
+
+      function drawSun(c, alpha) {
+        if (alpha < 0.02) return;
+        const x = sunPos.x * W, y = sunPos.y * H;
         const r = Math.min(W, H) * 0.055;
-        const t = clamp((metric - 0.55) / 0.30, 0, 1);
-        const eased = t * t * (3 - 2 * t);
-        if (eased < 0.01) return;
 
         c.save();
-        c.globalAlpha = eased;
+        c.globalAlpha = alpha;
         const glow = c.createRadialGradient(x, y, 0, x, y, r * 3.2);
         glow.addColorStop(0, 'rgba(246,198,91,.55)');
         glow.addColorStop(1, 'rgba(246,198,91,0)');
@@ -645,7 +794,22 @@
         ctx.clearRect(0, 0, W, H);
         ctx.drawImage(backdropCanvas, 0, 0, W, H);
 
-        drawSun(ctx, state.currentMetric, time);
+        // Daylight state from the browser clock (always live, like auto).
+        const blend = dayBlendForDate(new Date());
+        const nightF = 1 - blend.day;
+        const prog = updateSunPos(blend.h, blend.rise, blend.set);
+        const sunAlpha = clamp(blend.day + blend.dusk * 0.6, 0, 1);
+        drawSun(ctx, sunAlpha);
+
+        // Moon and stars live in the sky, behind the clouds.
+        drawMoon(ctx, nightF);
+        drawStars(ctx, Math.min(1, nightF * (1 - blend.dusk * 0.4) * 1.6), time);
+
+        // Long soft shadows away from a low sun; warm rim at dusk.
+        const shadeA = clamp(1 - Math.sin(Math.PI * clamp(prog, 0, 1)), 0, 1) *
+          clamp(blend.day + blend.dusk, 0, 1);
+        const shade = { dx: (0.5 - prog) * 1.6, alpha: shadeA };
+        const rim = blend.dusk;
 
         // Timeline clouds: pinned to snapshot age, each wearing its own
         // immutable metric. Downsample oldest-first, always keep latest.
@@ -681,6 +845,32 @@
         }
 
         ctx.drawImage(foregroundCanvas, 0, 0, W, H);
+        drawPinesGround(shade, rim);
+        const cabinInfo = drawCabinGround(shade, rim);
+        drawFireBaseGround();
+
+        // Foreground silhouette grade: ground and trees go darker while
+        // the sky stays bright.
+        const groundTop = H * LANDSCAPE_GROUND_TOP;
+        const gradeA = clamp((1 - blend.day) * 0.85, 0, 0.55);
+        if (gradeA > 0.01) {
+          const fg = ctx.createLinearGradient(0, groundTop - 40, 0, H);
+          fg.addColorStop(0, 'rgba(16,14,38,0)');
+          fg.addColorStop(1, 'rgba(16,14,38,' + gradeA.toFixed(3) + ')');
+          ctx.fillStyle = fg;
+          ctx.fillRect(0, groundTop - 40, W, H - groundTop + 40);
+        }
+
+        // Daylight washes; flames/glow (stage 4) punch through undimmed.
+        if (blend.dusk > 0.01) {
+          ctx.fillStyle = 'rgba(255,130,50,' + (0.30 * blend.dusk).toFixed(3) + ')';
+          ctx.fillRect(0, 0, W, H);
+        }
+        if (nightF > 0.01) {
+          ctx.fillStyle = 'rgba(8,16,52,' + (0.62 * nightF).toFixed(3) + ')';
+          ctx.fillRect(0, 0, W, H);
+        }
+        drawWindowBoost(ctx, cabinInfo.windows, nightF);
       }
 
       function frame(ts) {
@@ -701,6 +891,112 @@
         } else {
           rafRunning = false;
           render(ts / 1000); // exact final state, even if throttled
+        }
+      }
+
+      /**
+       * Positions the fire overlay canvas over the campfire spot.
+       * Called on init and resize; the overlay itself stays fixed-size.
+       */
+      function layoutFireOverlay() {
+        if (!fireCanvas) return;
+        const fx = LANDSCAPE_FIRE.x * W, fy = H * LANDSCAPE_GROUND_TOP + 26;
+        fireCanvas.width = LANDSCAPE_FIRE_OVERLAY_W;
+        fireCanvas.height = LANDSCAPE_FIRE_OVERLAY_H;
+        fireCanvas.style.width = LANDSCAPE_FIRE_OVERLAY_W + 'px';
+        fireCanvas.style.height = LANDSCAPE_FIRE_OVERLAY_H + 'px';
+        fireCanvas.style.left = Math.round(fx - LANDSCAPE_FIRE_OVERLAY_W / 2) + 'px';
+        fireCanvas.style.top = Math.round(fy - (LANDSCAPE_FIRE_OVERLAY_H - LANDSCAPE_FIRE_ANCHOR_DY)) + 'px';
+      }
+
+      /**
+       * Paints one deterministic fire frame (no accumulated particle state,
+       * so any frame rate looks correct). Local coords: fire base at (0, 0).
+       */
+      function paintFireOverlay(ts) {
+        if (!fireCtx) return;
+        const now = ts / 1000;
+        const blend = dayBlendForDate(new Date());
+        const nightF = 1 - blend.day;
+        const intensity = 0.55 * (1 + nightF * 0.5);
+        const flicker = 0.82 + 0.12 * Math.sin(now * 11) + 0.06 * Math.sin(now * 23 + 1.7);
+        const c = fireCtx, s = LANDSCAPE_FIRE.s;
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.clearRect(0, 0, LANDSCAPE_FIRE_OVERLAY_W, LANDSCAPE_FIRE_OVERLAY_H);
+        c.save();
+        c.translate(LANDSCAPE_FIRE_OVERLAY_W / 2, LANDSCAPE_FIRE_OVERLAY_H - LANDSCAPE_FIRE_ANCHOR_DY);
+        c.scale(s, s);
+
+        // Ground glow (behind flames).
+        const gr = (60 + intensity * 90) * flicker;
+        const glow = c.createRadialGradient(0, -10, 0, 0, -10, gr);
+        glow.addColorStop(0, 'rgba(255,190,90,' + (0.35 + intensity * 0.3).toFixed(3) + ')');
+        glow.addColorStop(1, 'rgba(255,150,60,0)');
+        c.fillStyle = glow;
+        c.beginPath(); c.arc(0, -10, gr, 0, Math.PI * 2); c.fill();
+
+        // Flames, additive.
+        c.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < LANDSCAPE_FIRE_FLAMES; i++) {
+          const age = (((now * 1.4 + i * 0.37) % 1) + 1) % 1;
+          const x = Math.sin(i * 7.3 + age * 5) * 10 * age;
+          const y = -6 - age * 62;
+          const r = Math.max(0.1, (7 + ((i * 3.7) % 9)) * (1 - age * 0.75) * flicker);
+          const g = c.createRadialGradient(x, y, 0, x, y, r);
+          g.addColorStop(0, 'rgba(255,236,150,' + (0.9 * (1 - age)).toFixed(3) + ')');
+          g.addColorStop(0.5, 'rgba(255,150,50,' + (0.55 * (1 - age)).toFixed(3) + ')');
+          g.addColorStop(1, 'rgba(200,60,20,0)');
+          c.fillStyle = g;
+          c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+        }
+        // Sparks.
+        c.fillStyle = '#ffdf8a';
+        for (let i = 0; i < LANDSCAPE_FIRE_SPARKS; i++) {
+          const age = (((now * 1.8 + i * 0.53) % 1) + 1) % 1;
+          const x = Math.sin(i * 5.1 + age * 9) * 20 * age;
+          const y = -10 - age * 110;
+          c.globalAlpha = 1 - age;
+          c.fillRect(x, y, 2, 2);
+        }
+        c.globalAlpha = 1;
+        c.globalCompositeOperation = 'source-over';
+        // Smoke drifts up front (normal composite, dimmed by night already
+        // present in the main scene behind it).
+        c.fillStyle = '#cfd4d6';
+        for (let k = 0; k < 4; k++) {
+          const age = (((now + k * 1.35) % 5.4) + 5.4) % 5.4 / 5.4;
+          const px = Math.sin(now / 0.9 + k * 2.1) * 4 + age * 26;
+          const py = -46 - age * 64;
+          c.globalAlpha = 0.22 * (1 - age);
+          c.beginPath(); c.arc(px, py, 4 + age * 11, 0, Math.PI * 2); c.fill();
+        }
+        c.globalAlpha = 1;
+        c.restore();
+      }
+
+      function fireLoop(ts) {
+        if (!fireRunning) return;
+        if (ts - fireLastPaint >= 1000 / LANDSCAPE_FIRE_FPS) {
+          fireLastPaint = ts;
+          paintFireOverlay(ts);
+        }
+        requestAnimationFrame(fireLoop);
+      }
+
+      function startFireOverlay() {
+        if (!fireCanvas) {
+          fireCanvas = document.getElementById('trajectoryFire');
+          if (!fireCanvas) return; // graceful no-op if canvas absent
+          fireCtx = fireCanvas.getContext('2d');
+        }
+        layoutFireOverlay();
+        if (REDUCED_MOTION) {
+          paintFireOverlay(1000); // single static frame, no loop
+          return;
+        }
+        if (!fireRunning) {
+          fireRunning = true;
+          requestAnimationFrame(fireLoop);
         }
       }
 
@@ -736,6 +1032,12 @@
         if (!started) {
           started = true;
           render(Date.now() / 1000);
+          startFireOverlay();
+          // Slow daylight/cloud-age refresh: one frame per minute keeps the
+          // time-of-day blend fresh with negligible cost.
+          setInterval(() => {
+            if (!document.hidden) requestRender();
+          }, LANDSCAPE_SLOW_REFRESH_MS);
         }
       }
 

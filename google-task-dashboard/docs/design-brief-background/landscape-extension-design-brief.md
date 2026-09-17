@@ -140,7 +140,11 @@ tall. Subtle drop shadow for separation.
 **Campfire** (30% across, scale 0.8): stone ring, crossed logs, three
 particle systems (additive flames yellow-to-red, expanding smoke, fast
 sparks) plus flickering ground glow. One intensity parameter drives
-emission and glow radius.
+emission and glow radius. Flames live on a dedicated 240x320 overlay
+canvas (`#trajectoryFire`) with its own 12fps loop, so the main scene
+stays on-demand; particles are deterministic functions of wall time
+(no accumulated state, correct at any frame rate). Reduced motion
+paints one static frame, no loop.
 
 **Safe zones**: tree-free discs around cabin (r 0.10) and campfire
 (r 0.08) — realistic clearing, prevents sprite collisions.
@@ -227,7 +231,8 @@ SNOW_LINE: 0.70, CLOUD_CAP: 25
 2. **House interior light**: done (warm windows + night boost).
 3. **Seasonal color shifts**: deferred (only sun times shift today).
 4. **Sound**: never — a dashboard background stays silent.
-5. **Daily cycle**: implemented in POC (Sibiu blend); product port pending.
+5. **Daily cycle**: ported to the dashboard (browser clock, always
+   auto). One frame per minute keeps the blend fresh; no slider.
 
 ## 12. Notes
 
