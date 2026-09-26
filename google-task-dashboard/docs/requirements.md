@@ -53,8 +53,6 @@ auth = sufficient security.
   `'true'`); `setTriggerEnabled(bool)` toggles trigger + property
 - `ingestTaskMetrics()` — live pull from Tasks API, append row
 - `getDashboardData()` — read Sheet only, no Tasks API call
-- `syncAndClearTasks()` — ingest snapshot, then clear all completed tasks
-  (all lists)
 - `deleteTasksCompletedOlderThan(cutoffWeeks=8)` — delete completed tasks
   older than cutoff, keep recent ones, re-ingest after
 - `downsampleLastYearToHourly()` — collapse last-365-day rows using the
@@ -76,7 +74,7 @@ auth = sufficient security.
 ### Concurrency & locking
 
 - All mutation operations (`ingestTaskMetrics`, `deleteOldCompletedTasks`,
-  `compressSheetData` / prune / downsample, `syncAndClearTasks`) use
+  `compressSheetData` / prune / downsample, `syncNow`) use
   `LockService.getScriptLock()` for true mutual exclusion across all execution
   contexts (manual triggers, automated cron, maintenance operations).
 - Lock acquisition uses `tryLock(timeoutMs)` with two timeout tiers:

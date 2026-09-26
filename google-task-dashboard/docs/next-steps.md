@@ -105,34 +105,29 @@ When editing this doc, use the following guidelines:
 
 ### 5. Adaptive historical snapshot downsampling
 
-📋 **Planned**
+✅ **DONE**
 
-**Implementation:** Replace the current uniform hourly downsampling with a
-configurable age-based policy. Define three categories: Recent (0–3 days,
-maximum 1 sample per `RECENT_INTERVAL_MINUTES`), Near-term (>3–7 days, maximum 1
-sample per `NEAR_TERM_INTERVAL_MINUTES`), and Historical (>7–365 days, maximum 1
-sample per `HISTORICAL_INTERVAL_HOURS`). Use the following explicit parameters:
-
-* `RECENT_MAX_AGE_DAYS = 3`
-* `RECENT_INTERVAL_MINUTES = 30`
-* `NEAR_TERM_MAX_AGE_DAYS = 7`
-* `NEAR_TERM_INTERVAL_MINUTES = 60`
-* `HISTORICAL_MAX_AGE_DAYS = 365`
-* `HISTORICAL_INTERVAL_HOURS = 3`
-
-Within each rolling interval, retain the latest snapshot and do not create or
-interpolate missing data. Data older than `HISTORICAL_MAX_AGE_DAYS` is not
-affected. Read-only rows within the affected `HISTORICAL_MAX_AGE_DAYS` range
-where practical, leaving older rows untouched. Preserve chronological ordering
-and return before/after/removal statistics.
+**Implementation:** Replaced the uniform hourly downsampling with the
+age-based policy below. `downsampleLastYearToHourly()` now buckets the
+last 365 days latest-wins (bucket keys namespaced by width so different
+bucket sizes cannot collide); `pruneDataOlderThan1Year()` (>1 year,
+1/day) is unchanged. Frontend confirm dialog, button title, and
+notifications updated to describe the policy.
 
 **Changes:**
 
-* [pending implementation]
+* Added constants: `RECENT_MAX_AGE_DAYS = 3`,
+  `RECENT_INTERVAL_MINUTES = 30`, `NEAR_TERM_MAX_AGE_DAYS = 7`,
+  `NEAR_TERM_INTERVAL_MINUTES = 60`, `HISTORICAL_MAX_AGE_DAYS = 365`,
+  `HISTORICAL_INTERVAL_HOURS = 3`
+* `compressSheetData('hourly')` applies the three-tier bucketing;
+  `compressSheetData('daily')` untouched
+* Updated `downsampleLastYearToHourly()` JSDoc, danger-zone button
+  title, confirm dialog, status, and notification texts
 
-**Files:** requirements.md, Code.js, Index.html
+**Files:** Code.js, Index.html, JavaScript.html
 
-**Effort:** M
+**Effort:** M ✓
 
 ---
 
@@ -290,7 +285,7 @@ of the dashboard data request and displays only the Top 5.
 
 ✅ **DONE**
 
-**Implementation:** Reduced per-row processing overhead in `getDashboardData()` by fixing column range, eliminating redundant number conversions, and caching the trigger check. These changes measurably improve dashboard load times when the sheet contains 500+ historic snapshots.
+**Implementation:** Reduced per-row processing overhead in `getDashboardData()` by fixing column range, eliminating redundant number conversions, and caching the trigger check. This keeps dashboard load times flat as the sheet grows toward 500+ historic snapshots.
 
 **Changes:**
 - Changed `getRange(1, 1, lastRow, Math.max(7, lastCol))` → fixed 7-column read — exactly the metrics columns, no more, no less
@@ -351,12 +346,3 @@ of the dashboard data request and displays only the Top 5.
   - if a sheet is created, historical data for 14d shall be stored and then 
     the UI shall show the most recent 7 items
   - the values 7 and 14 shall be configurable
-- we want to give the ETA a status/rating: 
-  - if its 14 or lower: thats considered good/green
-  - if its >14: thats caution/yellow
-  - if its >30: thats warning/red
-  - the status shall be marked in the ETA card
-  - the boundaries above shall also influence the velocity: if the velocity 
-    is such that the ETA is 14 or lower: velocity is good, if its slower so 
-    that ETA is in the caution range: its yellow, below that its red
-  - the velocity number shall also be color coded in the card

@@ -13,6 +13,12 @@ const OVERDUE_HOUR = 21;
 const DEFAULT_TIMEZONE = 'Europe/Bucharest';
 const TIMEOUT_INTERACTIVE_MS = 5000; // 5s for user-clicked operations
 const TIMEOUT_TRIGGER_MS = 10000; // 10s for automated triggers
+const RECENT_MAX_AGE_DAYS = 3;
+const RECENT_INTERVAL_MINUTES = 30;
+const NEAR_TERM_MAX_AGE_DAYS = 7;
+const NEAR_TERM_INTERVAL_MINUTES = 60;
+const HISTORICAL_MAX_AGE_DAYS = 365;
+const HISTORICAL_INTERVAL_HOURS = 3;
 
 /**
  * Serves the web dashboard HTML interface.
@@ -263,92 +269,108 @@ function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
 }
 
 /**
- * Internal metrics ingestion logic (assumes caller holds the lock).
- * Fetches all tasks, calculates metrics, persists snapshot and top overdue.
- * Tasks due more than 6 months in the future are intentionally excluded
- * from all counts to keep metrics focused on actionable work.
- * @return {Object} - snapshot object {timestamp, open, completed, overdue, overdue_severity}
+ * Creates a fresh metrics accumulator for a single task scan.
+ * @param {Date} now - Snapshot timestamp
+ * @return {Object} Accumulator object
  */
-function ingestTaskMetricsInternal() {
-  const now = new Date();
+function newMetricsAccumulator(now) {
   const sixMonthsCutoff = new Date(now);
   sixMonthsCutoff.setMonth(sixMonthsCutoff.getMonth() + 6);
-  
-  // Cache timezone and deadline lookups to avoid redundant calls
-  const timezone = getTimezone();
-  const deadlineCache = {}; // Map of dueDateStr -> overdueDeadline
+  return {
+    now: now,
+    sixMonthsCutoff: sixMonthsCutoff,
+    timezone: getTimezone(),
+    deadlineCache: {}, // Map of dueDateStr -> overdueDeadline
+    totalOpen: 0,
+    totalCompleted: 0,
+    totalOverdue: 0,
+    totalOverdueSeverity: 0.0,
+    totalSubtasksOpen: 0,
+    totalSubtasksCompleted: 0,
+    overdueTasksList: []
+  };
+}
 
-  let totalOpen = 0;
-  let totalCompleted = 0;
-  let totalOverdue = 0;
-  let totalOverdueSeverity = 0.0;
-  let totalSubtasksOpen = 0;
-  let totalSubtasksCompleted = 0;
-  const overdueTasksList = [];
+/**
+ * Accumulates a single task into the metrics accumulator.
+ * Shared by ingestion and the delete-old maintenance pass.
+ */
+function accumulateTask(acc, task, listId, listTitle) {
+  const weight = getTaskWeight(task.title);
+  const isSubtask = !!task.parent;
 
-  forEachTaskInAllLists((task, listId, listTitle) => {
-    const weight = getTaskWeight(task.title);
-    const isSubtask = !!task.parent;
-
-    if (task.status === 'completed') {
-      totalCompleted += weight;
+  if (task.status === 'completed') {
+    acc.totalCompleted += weight;
+    if (isSubtask) {
+      acc.totalSubtasksCompleted += weight;
+    }
+  } else if (task.status === 'needsAction') {
+    if (!task.due) {
+      acc.totalOpen += weight;
       if (isSubtask) {
-        totalSubtasksCompleted += weight;
+        acc.totalSubtasksOpen += weight;
       }
-    } else if (task.status === 'needsAction') {
-      if (!task.due) {
-        totalOpen += weight;
+    } else {
+      const dueDateStr = task.due;
+      const dueDateObj = new Date(dueDateStr);
+
+      if (!isNaN(dueDateObj.getTime()) && dueDateObj <= acc.sixMonthsCutoff) {
+        acc.totalOpen += weight;
         if (isSubtask) {
-          totalSubtasksOpen += weight;
+          acc.totalSubtasksOpen += weight;
         }
-      } else {
-        const dueDateStr = task.due;
-        const dueDateObj = new Date(dueDateStr);
 
-        if (!isNaN(dueDateObj.getTime()) && dueDateObj <= sixMonthsCutoff) {
-          totalOpen += weight;
-          if (isSubtask) {
-            totalSubtasksOpen += weight;
-          }
+        // Memoize deadline calculation by due date
+        if (!acc.deadlineCache[dueDateStr]) {
+          acc.deadlineCache[dueDateStr] = getOverdueDeadline(dueDateStr, acc.timezone, OVERDUE_HOUR);
+        }
+        const overdueDeadline = acc.deadlineCache[dueDateStr];
 
-          // Memoize deadline calculation by due date
-          if (!deadlineCache[dueDateStr]) {
-            deadlineCache[dueDateStr] = getOverdueDeadline(dueDateStr, timezone, OVERDUE_HOUR);
-          }
-          const overdueDeadline = deadlineCache[dueDateStr];
+        if (acc.now >= overdueDeadline) {
+          acc.totalOverdue += weight;
+          const diffMs = acc.now.getTime() - overdueDeadline.getTime();
+          const daysOverdue = diffMs / (1000 * 60 * 60 * 24);
+          const severity = weight * Math.sqrt(daysOverdue);
+          acc.totalOverdueSeverity += severity;
 
-          if (now >= overdueDeadline) {
-            totalOverdue += weight;
-            const diffMs = now.getTime() - overdueDeadline.getTime();
-            const daysOverdue = diffMs / (1000 * 60 * 60 * 24);
-            const severity = weight * Math.sqrt(daysOverdue);
-            totalOverdueSeverity += severity;
-
-            overdueTasksList.push({
-              taskId: task.id,
-              taskListId: listId,
-              taskListName: listTitle,
-              title: task.title || '',
-              dueDate: dueDateStr,
-              overdueDuration: daysOverdue,
-              severity: Number(severity.toFixed(2)),
-              parent: task.parent || ''
-            });
-          }
+          acc.overdueTasksList.push({
+            taskId: task.id,
+            taskListId: listId,
+            taskListName: listTitle,
+            title: task.title || '',
+            dueDate: dueDateStr,
+            overdueDuration: daysOverdue,
+            severity: Number(severity.toFixed(2)),
+            parent: task.parent || ''
+          });
         }
       }
     }
-  });
+  }
+}
 
-  const snapshot = {
-    timestamp: now.toISOString(),
-    open: totalOpen,
-    completed: totalCompleted,
-    overdue: totalOverdue,
-    overdue_severity: Number(totalOverdueSeverity.toFixed(2)),
-    subtasks_open: totalSubtasksOpen,
-    subtasks_completed: totalSubtasksCompleted
+/**
+ * Builds the snapshot object from a filled accumulator (no persistence).
+ * @return {Object} Snapshot object
+ */
+function snapshotFromAccumulator(acc) {
+  return {
+    timestamp: acc.now.toISOString(),
+    open: acc.totalOpen,
+    completed: acc.totalCompleted,
+    overdue: acc.totalOverdue,
+    overdue_severity: Number(acc.totalOverdueSeverity.toFixed(2)),
+    subtasks_open: acc.totalSubtasksOpen,
+    subtasks_completed: acc.totalSubtasksCompleted
   };
+}
+
+/**
+ * Persists an accumulator as a new snapshot row + top overdue sheet.
+ * @return {Object} Snapshot object
+ */
+function persistSnapshot(acc) {
+  const snapshot = snapshotFromAccumulator(acc);
 
   const sheet = getOrCreateSheet();
   sheet.appendRow([
@@ -361,11 +383,46 @@ function ingestTaskMetricsInternal() {
     snapshot.subtasks_completed
   ]);
 
-  overdueTasksList.sort((a, b) => b.severity - a.severity);
-  const topOverdue = overdueTasksList.slice(0, TOP_OVERDUE_STORAGE_ITEMS);
+  acc.overdueTasksList.sort((a, b) => b.severity - a.severity);
+  const topOverdue = acc.overdueTasksList.slice(0, TOP_OVERDUE_STORAGE_ITEMS);
   updateTopOverdueSheet(topOverdue);
 
   return snapshot;
+}
+
+/**
+ * Checks whether a completed task is older than the cutoff date.
+ * Tasks without parseable completed/updated timestamps are never old.
+ * @return {boolean}
+ */
+function isOldCompletedTask(task, cutoffDate) {
+  if (task.status !== 'completed') return false;
+
+  if (task.completed) {
+    const completedDate = new Date(task.completed);
+    if (!isNaN(completedDate.getTime()) && completedDate < cutoffDate) {
+      return true;
+    }
+  } else if (task.updated) {
+    const updatedDate = new Date(task.updated);
+    if (!isNaN(updatedDate.getTime()) && updatedDate < cutoffDate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Internal metrics ingestion logic (assumes caller holds the lock).
+ * Fetches all tasks, calculates metrics, persists snapshot and top overdue.
+ * Tasks due more than 6 months in the future are intentionally excluded
+ * from all counts to keep metrics focused on actionable work.
+ * @return {Object} - snapshot object {timestamp, open, completed, overdue, overdue_severity}
+ */
+function ingestTaskMetricsInternal() {
+  const acc = newMetricsAccumulator(new Date());
+  forEachTaskInAllLists((task, listId, listTitle) => accumulateTask(acc, task, listId, listTitle));
+  return persistSnapshot(acc);
 }
 
 /**
@@ -506,7 +563,7 @@ function getTopOverdueTasksForDisplay() {
 
 /**
  * Concurrency-safe manual sync (interactive entry point).
- * @return {Object} Refreshed dashboard data or error.
+ * @return {Object} {success: true, data: dashboard} or {success: false, error: string}.
  */
 function syncNow() {
   const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
@@ -522,42 +579,10 @@ function syncNow() {
     };
   }
 
-  return result.result;
-}
-
-/**
- * Concurrency-safe Sync and Clear ALL completed tasks across all lists (interactive entry point).
- * @return {Object} Refreshed dashboard data or error.
- */
-function syncAndClearTasks() {
-  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
-    // 1. Ingest metrics first for safe persistence
-    ingestTaskMetricsInternal();
-
-    // 2. Clear completed tasks in each task list
-    const taskListsResult = Tasks.Tasklists.list();
-    const taskLists = (taskListsResult && taskListsResult.items) ? taskListsResult.items : [];
-
-    for (let i = 0; i < taskLists.length; i++) {
-      try {
-        Tasks.Tasks.clear(taskLists[i].id);
-      } catch (e) {
-        Logger.log('Failed to clear list ' + taskLists[i].id + ': ' + e);
-      }
-    }
-
-    return getDashboardData();
-  });
-
-  // Unwrap the lock result
-  if (!result.success) {
-    return {
-      success: false,
-      error: result.error
-    };
-  }
-
-  return result.result;
+  return {
+    success: true,
+    data: result.result
+  };
 }
 
 /**
@@ -574,34 +599,33 @@ function deleteOldCompletedTasks(cutoffWeeks) {
     const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
     const cutoffDate = new Date(startTime - cutoffMs);
     let totalDeleted = 0;
+    const toDelete = [];
 
+    // Single scan: accumulate fresh post-delete metrics while collecting
+    // old completed tasks for deletion (they are excluded from the fresh
+    // counts since they will no longer exist).
+    const acc = newMetricsAccumulator(new Date());
     forEachTaskInAllLists((task, listId, listTitle) => {
-      if (task.status !== 'completed') return;
-
-      let isOld = false;
-      if (task.completed) {
-        const completedDate = new Date(task.completed);
-        if (!isNaN(completedDate.getTime()) && completedDate < cutoffDate) {
-          isOld = true;
-        }
-      } else if (task.updated) {
-        const updatedDate = new Date(task.updated);
-        if (!isNaN(updatedDate.getTime()) && updatedDate < cutoffDate) {
-          isOld = true;
-        }
+      if (isOldCompletedTask(task, cutoffDate)) {
+        toDelete.push({ task: task, listId: listId, listTitle: listTitle });
+        return;
       }
-
-      if (isOld) {
-        try {
-          Tasks.Tasks.remove(listId, task.id);
-          totalDeleted++;
-        } catch (delErr) {
-          Logger.log('Failed to delete task ' + task.id + ': ' + delErr);
-        }
-      }
+      accumulateTask(acc, task, listId, listTitle);
     });
 
-    ingestTaskMetricsInternal();
+    for (let i = 0; i < toDelete.length; i++) {
+      const item = toDelete[i];
+      try {
+        Tasks.Tasks.remove(item.listId, item.task.id);
+        totalDeleted++;
+      } catch (delErr) {
+        Logger.log('Failed to delete task ' + item.task.id + ': ' + delErr);
+        // Still exists: count it in the fresh metrics.
+        accumulateTask(acc, item.task, item.listId, item.listTitle);
+      }
+    }
+
+    persistSnapshot(acc);
     const dashboardData = getDashboardData();
     const durationMs = Date.now() - startTime;
 
@@ -643,7 +667,10 @@ function extractCalendarDate(timestamp) {
 /**
  * Unified compression function for sheet data cleanup.
  * Mode "daily": Reduces old data (>1 year) to 1 snapshot per calendar day.
- * Mode "hourly": Reduces recent data (<1 year) to 1 snapshot per 60-minute window.
+ * Mode "hourly": Age-based downsampling within the last 365 days
+ * (latest wins per bucket): 0-3 days keep 1 per 30 minutes, 3-7 days keep
+ * 1 per 60 minutes, 7-365 days keep 1 per 3 hours. Data older than 365
+ * days is untouched (see pruneDataOlderThan1Year).
  * @param {string} mode - Either "daily" or "hourly"
  * @return {Object} { success: boolean, totalBefore: number, totalAfter: number, totalRemoved: number, percentageRemoved: number, durationMs: number, message?: string, error?: string }
  */
@@ -717,22 +744,33 @@ function compressSheetData(mode) {
         }
       }
     } else {
-      // Hourly mode: recent data (<1 year), keep 1 per fixed 60-minute bucket (latest wins)
-      if (candidateRows && candidateRows.length > 0) {
-        const ONE_HOUR_MS = 60 * 60 * 1000;
+      // Hourly mode: age-based policy within the last 365 days (latest wins).
+      // Bucket keys are namespaced by bucket size so different bucket widths
+      // can never collide on the same key.
+      const bucketMsForAge = (ageMs) => {
+        if (ageMs <= RECENT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000) {
+          return RECENT_INTERVAL_MINUTES * 60 * 1000;
+        }
+        if (ageMs <= NEAR_TERM_MAX_AGE_DAYS * 24 * 60 * 60 * 1000) {
+          return NEAR_TERM_INTERVAL_MINUTES * 60 * 1000;
+        }
+        return HISTORICAL_INTERVAL_HOURS * 60 * 60 * 1000;
+      };
 
+      if (candidateRows && candidateRows.length > 0) {
         for (let i = 0; i < candidateRows.length; i++) {
           const current = candidateRows[i];
-          const bucket = Math.floor(current.timestampMs / ONE_HOUR_MS);
+          const bucketMs = bucketMsForAge(now - current.timestampMs);
+          const key = bucketMs + ':' + Math.floor(current.timestampMs / bucketMs);
 
-          if (Object.prototype.hasOwnProperty.call(seenBuckets, bucket)) {
+          if (Object.prototype.hasOwnProperty.call(seenBuckets, key)) {
             // A row is already kept for this bucket; since candidateRows is sorted
             // ascending, the current row is newer — replace the kept row and mark
             // the stale one for deletion.
-            rowsToDelete.push(seenBuckets[bucket]);
-            seenBuckets[bucket] = current.rowNumber;
+            rowsToDelete.push(seenBuckets[key]);
+            seenBuckets[key] = current.rowNumber;
           } else {
-            seenBuckets[bucket] = current.rowNumber;
+            seenBuckets[key] = current.rowNumber;
           }
         }
       }
@@ -815,8 +853,10 @@ function pruneDataOlderThan1Year() {
 }
 
 /**
- * Downsamples the last 365 days of snapshot rows to at most 1 entry per 60-minute window.
- * Public wrapper for compressSheetData('hourly').
+ * Downsamples the last 365 days of snapshot rows with an age-based policy
+ * (latest wins): 1 entry per 30 minutes (0-3 days), per 60 minutes (3-7
+ * days), per 3 hours (7-365 days). Public wrapper for
+ * compressSheetData('hourly').
  * @return {Object}
  */
 function downsampleLastYearToHourly() {

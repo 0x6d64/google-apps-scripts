@@ -108,6 +108,15 @@
     box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
   }
 
+  /* Timestamp lines share one row to save vertical space (wrap on narrow screens). */
+  .header-title .subtitle {
+    display: inline;
+  }
+
+  #lastSheetFetchAge {
+    margin-left: 12px;
+  }
+
   .subtitle {
     margin: 4px 0 0;
     color: var(--text-muted);
@@ -491,7 +500,7 @@
     background: var(--surface);
     border-radius: var(--radius);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
-    max-width: 440px;
+    max-width: 720px;
     width: 100%;
     padding: 24px;
   }
@@ -502,21 +511,31 @@
     color: var(--text);
   }
 
-  .prune-stats-table {
-    width: 100%;
-    border-collapse: collapse;
+  .modal-stats {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
     margin-bottom: 20px;
-    font-size: 14px;
   }
 
-  .prune-stats-table td {
-    padding: 8px 4px;
-    border-bottom: 1px solid #f1f3f4;
+  .modal-stat {
+    flex: 1 1 110px;
+    text-align: center;
+    padding: 10px 6px;
+    background: var(--bg);
+    border-radius: 8px;
   }
 
-  .prune-stats-table td:last-child {
-    text-align: right;
-    font-weight: 600;
+  .modal-stat .stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .modal-stat .stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
   }
 
   .modal-footer {

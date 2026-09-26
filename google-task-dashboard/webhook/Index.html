@@ -174,8 +174,8 @@
             <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact.">
               <span class="btn-icon" aria-hidden="true">🗑️</span> Delete Old Done Tasks (>8w)
             </button>
-            <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days to at most 1 entry per rolling 60-minute window, keeping the latest snapshot in each window. Permanently removes intra-hour data.">
-              <span class="btn-icon" aria-hidden="true">📉</span> Downsample Last Year (1/hour)
+            <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days with an age-based policy (latest wins): 1 entry per 30 minutes (0-3 days), per 60 minutes (3-7 days), per 3 hours (7-365 days). Permanently removes redundant snapshots.">
+              <span class="btn-icon" aria-hidden="true">📉</span> Downsample Last Year
             </button>
             <button id="btnPruneOldData" class="btn btn-secondary" title="Downsample snapshot rows older than 1 year (365 days) down to 1 entry per calendar day to save spreadsheet space and improve chart speed.">
               <span class="btn-icon" aria-hidden="true">🧹</span> Prune Old Data (>1 year)
