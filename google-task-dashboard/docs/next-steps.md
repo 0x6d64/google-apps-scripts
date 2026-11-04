@@ -329,6 +329,28 @@ of the dashboard data request and displays only the Top 5.
 
 ---
 
+### 14. Fix "Sync failed: not possible to delete all non-frozen rows"
+
+✅ **DONE**
+
+**Implementation:** `updateTopOverdueSheet()` used `deleteRows(2, lastRow - 1)` on every sync.
+`deleteRows()` permanently shrinks the sheet grid, so after enough syncs the sheet held only
+header + data rows; the next deletion tried to remove every non-frozen row and Sheets rejected
+it. Replaced deletion with `clearContent()` so the grid keeps its size. Added a grid-growth guard
+in case the sheet was already shrunk by earlier runs.
+
+**Changes:**
+- Replaced `sheet.deleteRows(2, lastRow - 1)` with
+  `sheet.getRange(2, 1, lastRow - 1, columnCount).clearContent()`
+- Added `insertRowsAfter()` guard when the grid is smaller than header + new rows
+- Replaced hard-coded column count `8` with `TOP_OVERDUE_HEADERS.length`
+
+**Files:** Code.js
+
+**Effort:** S ✓
+
+---
+
 ## Feature requests
 
 - at the bottom of the dashboard: add a text field that can be copied from 

@@ -443,9 +443,13 @@ function ingestTaskMetrics() {
 function updateTopOverdueSheet(topOverdueTasks) {
   const sheet = getOrCreateTopOverdueSheet();
   const lastRow = sheet.getLastRow();
+  const columnCount = TOP_OVERDUE_HEADERS.length;
 
+  // Clear previous rows instead of deleting them: deleteRows permanently shrinks
+  // the sheet grid, eventually leaving no non-frozen rows to delete (Sheets
+  // rejects that with "not possible to delete all non-frozen rows").
   if (lastRow > 1) {
-    sheet.deleteRows(2, lastRow - 1);
+    sheet.getRange(2, 1, lastRow - 1, columnCount).clearContent();
   }
 
   // Batch build rows instead of loop append
@@ -461,7 +465,12 @@ function updateTopOverdueSheet(topOverdueTasks) {
   ]);
 
   if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, 8).setValues(rows);
+    // Grow the grid if a previous shrink left too few rows available
+    const requiredRows = rows.length + 1;
+    if (sheet.getMaxRows() < requiredRows) {
+      sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+    }
+    sheet.getRange(2, 1, rows.length, columnCount).setValues(rows);
   }
 }
 
