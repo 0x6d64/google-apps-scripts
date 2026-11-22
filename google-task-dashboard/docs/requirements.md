@@ -169,3 +169,11 @@ auth = sufficient security.
   `getDashboardData()`. Keeps background polling free.
 - Historical Sheet rows are immutable snapshots; deleting/purging tasks
   never rewrites past rows, only affects the next snapshot's counts.
+
+## Deployment
+
+- Deploy with `./deploy.sh`. It stamps the git commit hash (suffix `-dirty` if `webhook/`
+  has uncommitted changes) and build time into `webhook/Version.js`, runs `clasp push`,
+  and restores the placeholder afterwards.
+- The deployed build is shown in the dashboard footer and returned by `getBuildInfo()`.
+- Commit before deploying so the stamped hash matches the deployed code.
