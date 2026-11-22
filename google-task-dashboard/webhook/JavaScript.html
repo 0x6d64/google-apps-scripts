@@ -2388,7 +2388,7 @@
 
           showPruneResultModal(result);
           showStatus('Pruning complete. Refreshing dashboard...', 'success');
-          showNotification(`Pruned ${result.totalPruned} rows\nReduced to 1/day`, '🧹', 'success', 4000);
+          showNotification(`Pruned ${result.totalRemoved} rows\nReduced to 1/day`, '🧹', 'success', 4000);
           refreshDashboardData();
         })
         .withFailureHandler((err) => {
@@ -2451,7 +2451,7 @@
             <div class="modal-stat"><div class="stat-value">${result.totalBefore}</div><div class="stat-label">Rows before</div></div>
             <div class="modal-stat"><div class="stat-value">${result.totalRemoved}</div><div class="stat-label">Removed</div></div>
             <div class="modal-stat"><div class="stat-value">${result.totalAfter}</div><div class="stat-label">Remaining</div></div>
-            <div class="modal-stat"><div class="stat-value">${Number(result.percentageRemoved || 0).toFixed(1)}%</div><div class="stat-label">Removed %</div>
+            <div class="modal-stat"><div class="stat-value">${Number(result.percentageRemoved || 0).toFixed(1)}%</div><div class="stat-label">Removed %</div></div>
             <div class="modal-stat"><div class="stat-value">${result.durationMs}ms</div><div class="stat-label">Took</div></div>
           </div>
           <div class="modal-footer">
@@ -2478,9 +2478,9 @@
           <h3>✅ Pruning Complete</h3>
           <div class="modal-stats">
             <div class="modal-stat"><div class="stat-value">${result.totalBefore}</div><div class="stat-label">Rows before</div></div>
-            <div class="modal-stat"><div class="stat-value">${result.totalPruned}</div><div class="stat-label">Pruned</div></div>
+            <div class="modal-stat"><div class="stat-value">${result.totalRemoved}</div><div class="stat-label">Pruned</div></div>
             <div class="modal-stat"><div class="stat-value">${result.totalAfter}</div><div class="stat-label">Remaining</div></div>
-            <div class="modal-stat"><div class="stat-value">${Number(result.percentageRemoved || 0).toFixed(1)}%</div><div class="stat-label">Removed %</div>
+            <div class="modal-stat"><div class="stat-value">${Number(result.percentageRemoved || 0).toFixed(1)}%</div><div class="stat-label">Removed %</div></div>
             <div class="modal-stat"><div class="stat-value">${result.durationMs}ms</div><div class="stat-label">Took</div></div>
           </div>
           <div class="modal-footer">
