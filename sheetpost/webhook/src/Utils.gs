@@ -43,9 +43,9 @@ function nowUtcIso() {
  * hex string, for use as WEBHOOK_TOKEN.
  *
  * Built from two v4 UUIDs (Apps Script's available source of secure
- * randomness), concatenated and stripped of separators. Two UUIDs
- * provide comfortably more than 256 bits of entropy; we truncate to
- * exactly 64 hex characters (256 bits) for a predictable, fixed length.
+ * randomness), concatenated and stripped of separators. A v4 UUID has
+ * 122 random bits (version/variant digits are fixed), so the 64-character
+ * result carries about 244 bits of entropy, which is plenty for this use.
  *
  * @return {string}
  */
@@ -101,4 +101,46 @@ function isQuotaError(err) {
     message.indexOf('rate limit') !== -1 ||
     message.indexOf('quota') !== -1 ||
     message.indexOf('Quota') !== -1;
+}
+
+/**
+ * Constant-time string comparison, for secrets.
+ *
+ * @param {*} a
+ * @param {*} b
+ * @return {boolean}
+ */
+function safeEquals(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  let diff = a.length ^ b.length;
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return diff === 0;
+}
+
+/**
+ * Neutralizes spreadsheet formula injection: a string starting with
+ * =, +, - or @ would be interpreted as a formula by appendRow, so it is
+ * prefixed with a single quote (shown as plain text in the sheet).
+ *
+ * @param {*} value
+ * @return {*}
+ */
+function sanitizeCell(value) {
+  if (typeof value === 'string' && /^[=+\-@]/.test(value)) {
+    return "'" + value;
+  }
+  return value;
+}
+
+/**
+ * Size of a request body in bytes (UTF-8), not characters.
+ *
+ * @param {string} contents
+ * @return {number}
+ */
+function byteLength(contents) {
+  return Utilities.newBlob(contents).getBytes().length;
 }

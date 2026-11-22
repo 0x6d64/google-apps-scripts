@@ -9,10 +9,7 @@ var DEFAULT_EVENT_MINUTES = 30;
 var STATUS_EVENT_MINUTES = 1;
 var STATUS_EVENT_COLOR = CalendarApp.EventColor.RED;
 var STATUS_EVENT_PREFIX = '📍 ';
-
-var LOCK_TIMEOUT_MS = 5000;
-var RETRY_COUNT = 2;
-var RETRY_DELAYS_MS = [1000, 3000];
+var STATUS_SHEET_TYPE = 'pebble'; // value of the Type column for status rows
 
 /**
  * Handles calendar event creation from voice input.
@@ -32,7 +29,7 @@ function handleCalendarEvent(secret, text) {
       return { ok: false, error: 'server not configured' };
     }
 
-    if (secret !== config.sharedSecret) {
+    if (!safeEquals(secret, config.sharedSecret)) {
       Logger.log('Rejected: invalid secret');
       return { ok: false, error: 'invalid secret' };
     }
@@ -74,7 +71,7 @@ function handleCalendarEvent(secret, text) {
             const config2 = getConfig();
             const spreadsheet = getOrCreateSpreadsheet(config2.spreadsheetName);
             const sheet = getOrCreateSheet(spreadsheet, config2.sheetName);
-            appendEntry(sheet, [timestamp, p.title, 'pebble']);
+            appendEntry(sheet, [timestamp, p.title, STATUS_SHEET_TYPE]);
           },
           RETRY_COUNT,
           RETRY_DELAYS_MS

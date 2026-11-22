@@ -1,4 +1,4 @@
-﻿// Voice Notes -> Google Calendar bridge (Google Apps Script web app).
+// Voice Notes -> Google Calendar bridge (Google Apps Script web app).
 //
 // Runs as YOU, so there is no OAuth client / consent-screen setup and no token
 // juggling — it just calls CalendarApp. See bridge/README.md for deploy steps.

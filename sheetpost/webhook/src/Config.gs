@@ -31,8 +31,7 @@ function getConfig() {
 /**
  * One-time interactive setup. Run this manually from the Apps Script
  * editor (select "setup" in the function dropdown, then "Run") after
- * first deploying the project, or visit the deployed Web App URL to
- * trigger automatic self-bootstrapping.
+ * first deploying the project.
  *
  * Generates a WEBHOOK_TOKEN if one isn't already configured, and fills
  * in default values for the remaining properties. Existing values are
