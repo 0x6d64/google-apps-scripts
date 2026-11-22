@@ -115,6 +115,8 @@ def _load_from_file(path: Path, loaded: dict[str, str]) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
 
         # Only load SHEETPOST_* vars
         if not key.startswith("SHEETPOST_"):
@@ -311,7 +313,7 @@ class HumanModeCLI:
         if result.ok:
             print("\u2713 Note saved")
             return 0
-        print(f"\u2717 Error: {result.error}")
+        print(f"\u2717 Error: {result.error}", file=sys.stderr)
         return 1
 
 

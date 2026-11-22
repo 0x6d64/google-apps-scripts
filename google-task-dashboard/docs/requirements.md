@@ -34,7 +34,7 @@ auth = sufficient security.
 - `overdue`: open tasks with a due date whose effective overdue deadline has
   passed. Because the Tasks API does not expose the time-of-day component, the
   effective deadline is 21:00 on the due calendar date, using the Apps Script
-  project timezone.
+  project timezone (`Europe/Bucharest` in `appsscript.json`).
 - Tasks due today are not overdue before 21:00; tasks due on an earlier
   calendar date are overdue throughout the current day. Tasks without a due
   date are never overdue.
@@ -51,9 +51,11 @@ auth = sufficient security.
   subtasks_open, subtasks_completed`
 - Auto-install 3h trigger on first run if `AUTO_SYNC_ENABLED` unset (default
   `'true'`); `setTriggerEnabled(bool)` toggles trigger + property
-- `ingestTaskMetrics()` — live pull from Tasks API, append row
+- `ingestTaskMetrics()` — live pull from Tasks API, append row. Aborts (no
+  snapshot row written) if any task list fails to load, so partial data never
+  lands in the sheet.
 - `getDashboardData()` — read Sheet only, no Tasks API call
-- `deleteTasksCompletedOlderThan(cutoffWeeks=8)` — delete completed tasks
+- `deleteOldCompletedTasks(cutoffWeeks=8)` — delete completed tasks
   older than cutoff, keep recent ones, re-ingest after
 - `downsampleLastYearToHourly()` — collapse last-365-day rows using the
   configured age-based downsampling policy, latest-wins
@@ -65,8 +67,8 @@ auth = sufficient security.
 - `getDashboardData()` reads the top 5 overdue tasks from the Top Overdue
   sheet (display limit) for dashboard rendering. If no overdue tasks exist,
   the section is hidden. Sheet may contain up to 20 tasks.
-- Top Overdue sheet updates on every `ingestTaskMetrics()` call; deletes all
-  prior data rows and appends fresh top 10.
+- Top Overdue sheet updates on every `ingestTaskMetrics()` call; clears all
+  prior data rows and writes the fresh top 20.
 - `pruneDataOlderThan1Year()` — collapse >365-day rows to 1/calendar-day
   (UTC); abort if >80% of rows would be deleted; return stats
   (`totalBefore/After/Pruned/durationMs`)
@@ -95,7 +97,7 @@ auth = sufficient security.
   (ignore drops from purge/delete). Use actual elapsed time between
   snapshots, not fixed interval.
 - Top Overdue section: displays the top 5 most severe overdue tasks from the
-  Top Overdue sheet (which stores up to 10 for extensibility). Each task shows
+  Top Overdue sheet (which stores up to 20). Each task shows
   title, overdue duration, and individual severity, plus an `Open Google Tasks`
   action. Section is hidden when no overdue tasks are available.
 - Backlog ETA uses a neutral indigo/blue treatment distinct from the red
@@ -167,3 +169,11 @@ auth = sufficient security.
   `getDashboardData()`. Keeps background polling free.
 - Historical Sheet rows are immutable snapshots; deleting/purging tasks
   never rewrites past rows, only affects the next snapshot's counts.
+
+## Deployment
+
+- Deploy with `./deploy.sh`. It stamps the git commit hash (suffix `-dirty` if `webhook/`
+  has uncommitted changes) and build time into `webhook/Version.js`, runs `clasp push`,
+  and restores the placeholder afterwards.
+- The deployed build is shown in the dashboard footer and returned by `getBuildInfo()`.
+- Commit before deploying so the stamped hash matches the deployed code.

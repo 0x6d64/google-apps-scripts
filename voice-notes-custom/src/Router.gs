@@ -13,8 +13,13 @@
  * @return {ContentService.TextOutput}
  */
 function doGet(e) {
-  const result = handleCalendarEvent(e.parameter.secret, e.parameter.text);
-  return jsonResponse(result.ok, result.error);
+  try {
+    const result = handleCalendarEvent(e.parameter.secret, e.parameter.text);
+    return jsonResponse(result.ok, result.error);
+  } catch (err) {
+    Logger.log('Router error: ' + (err && err.message) + '\n' + (err && err.stack));
+    return jsonResponse(false, 'internal error');
+  }
 }
 
 /**
@@ -32,7 +37,7 @@ function doPost(e) {
       return jsonResponse(false, 'missing request body');
     }
 
-    if (e.postData.contents.length > 10 * 1024) {
+    if (byteLength(e.postData.contents) > 10 * 1024) {
       Logger.log('Rejected: request body too large');
       return jsonResponse(false, 'request body too large');
     }
@@ -46,6 +51,10 @@ function doPost(e) {
     }
 
     // Dispatch by field presence
+    if (typeof body !== 'object' || body === null) {
+      return jsonResponse(false, 'invalid request body');
+    }
+
     if (body.token !== undefined) {
       // Sheet webhook: token + text + type
       const result = handleSheetWebhook(body.token, body.text, body.type);

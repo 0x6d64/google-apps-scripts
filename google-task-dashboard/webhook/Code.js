@@ -30,7 +30,6 @@ function doGet() {
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
     .setTitle('Google Tasks Dashboard')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
@@ -248,7 +247,8 @@ function forEachTaskInAllLists(callback) {
  * @return {Date} - UTC time representing that deadline
  */
 function getOverdueDeadline(dueDateStr, timezone, overdueHour) {
-  const parts = dueDateStr.split('-');
+  // Tasks API returns RFC 3339 ("2024-01-31T00:00:00.000Z"); keep the date part only
+  const parts = String(dueDateStr).substring(0, 10).split('-');
   const year = parseInt(parts[0], 10);
   const month = parseInt(parts[1], 10) - 1;
   const day = parseInt(parts[2], 10);
@@ -421,7 +421,11 @@ function isOldCompletedTask(task, cutoffDate) {
  */
 function ingestTaskMetricsInternal() {
   const acc = newMetricsAccumulator(new Date());
-  forEachTaskInAllLists((task, listId, listTitle) => accumulateTask(acc, task, listId, listTitle));
+  const complete = forEachTaskInAllLists((task, listId, listTitle) => accumulateTask(acc, task, listId, listTitle));
+  if (!complete) {
+    // Never persist partial data: it would show up as a bogus drop in the charts.
+    throw new Error('Could not read all task lists; snapshot skipped.');
+  }
   return persistSnapshot(acc);
 }
 
@@ -479,16 +483,19 @@ function updateTopOverdueSheet(topOverdueTasks) {
  * Includes data validation and type coercion. Also fetches top overdue tasks.
  * @return {Object} { headers: string[], rows: Array<Array<any>>, sheetUrl: string, triggerActive: boolean, topOverdueTasksTopX: Array<Object> }
  */
-function getDashboardData() {
+function getDashboardData(isRetry) {
   const sheet = getOrCreateSheet();
   const sheetUrl = sheet.getParent().getUrl();
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
 
   if (lastRow <= 1) {
+    if (isRetry) {
+      throw new Error('Metrics sheet is still empty after initial ingestion.');
+    }
     // Auto-init: call internal version directly (no locking needed since this is a single execution)
     ingestTaskMetricsInternal();
-    return getDashboardData();
+    return getDashboardData(true);
   }
 
   const rawValues = sheet.getRange(1, 1, lastRow, Math.max(7, lastCol)).getValues();
@@ -614,13 +621,17 @@ function deleteOldCompletedTasks(cutoffWeeks) {
     // old completed tasks for deletion (they are excluded from the fresh
     // counts since they will no longer exist).
     const acc = newMetricsAccumulator(new Date());
-    forEachTaskInAllLists((task, listId, listTitle) => {
+    const complete = forEachTaskInAllLists((task, listId, listTitle) => {
       if (isOldCompletedTask(task, cutoffDate)) {
         toDelete.push({ task: task, listId: listId, listTitle: listTitle });
         return;
       }
       accumulateTask(acc, task, listId, listTitle);
     });
+    if (!complete) {
+      // Abort before deleting anything: the scan is incomplete.
+      throw new Error('Could not read all task lists; nothing was deleted.');
+    }
 
     for (let i = 0; i < toDelete.length; i++) {
       const item = toDelete[i];

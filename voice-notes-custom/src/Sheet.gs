@@ -29,7 +29,7 @@ function handleSheetWebhook(token, text, type) {
       return { ok: false, error: 'server not configured' };
     }
 
-    if (token !== config.sharedSecret) {
+    if (!safeEquals(token, config.sharedSecret)) {
       Logger.log('Rejected: invalid token');
       return { ok: false, error: 'invalid token' };
     }
@@ -170,7 +170,7 @@ function appendEntry(sheet, row) {
   const lock = LockService.getScriptLock();
   lock.waitLock(LOCK_TIMEOUT_MS);
   try {
-    sheet.appendRow(row);
+    sheet.appendRow(row.map(sanitizeCell));
   } finally {
     lock.releaseLock();
   }
