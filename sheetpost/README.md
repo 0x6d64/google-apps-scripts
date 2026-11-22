@@ -36,13 +36,14 @@ Append rows to a Google Sheet via HTTPS POST requests.
    * Click **Deploy** and authorize spreadsheet and Drive permissions.
    * Copy the **Web App URL** (e.g., `https://script.google.com/macros/s/AKfycb.../exec`).
 
-### Step 2: Bootstrap and Retrieve Token
+### Step 2: Generate and Retrieve Token
 
-1. **Initialize Web App**: Open the Web App URL in a web browser.
+1. **Run setup**: In the Apps Script editor, select `setup` in the function dropdown and click
+   **Run**.
 2. **Retrieve Token**:
-   * The initial visit triggers setup, generating default properties and a 256-bit `WEBHOOK_TOKEN`.
-   * Copy the displayed `WEBHOOK_TOKEN` immediately.
-   * Subsequent requests to this URL will return an "Access Denied" page.
+   * Setup generates default properties and a random `WEBHOOK_TOKEN`.
+   * Open **Execution log** and copy the token immediately. It is never shown again.
+   * The Web App URL only serves a static status page; it never reveals the token.
 
 ### Step 3: Configure Python Client
 

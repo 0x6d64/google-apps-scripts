@@ -47,7 +47,8 @@ Content-Type: application/json
 * `token`: Required string matching stored `WEBHOOK_TOKEN`.
 * `type`: Required string, 1–200 characters. Identifies entry category.
 * `text`: Required string, 1–1000 characters.
-* `id`: Optional string, 1–100 characters. Used for client-side idempotency.
+* `id`: Optional string, 1–100 characters. Used for client-side idempotency
+  (not implemented).
 
 ### Response Payload: Success
 
@@ -68,7 +69,8 @@ HTTP Status: 200
 }
 ```
 
-HTTP Status: 400 or 500
+HTTP Status: 200. Apps Script always returns HTTP 200; real HTTP 400/500 codes
+are not implemented.
 
 ### Error Messages
 
@@ -86,8 +88,10 @@ HTTP Status: 400 or 500
 WEBHOOK_TOKEN       = <random 256-bit token>
 SPREADSHEET_NAME    = "Notes"
 SHEET_NAME          = "Notes"
-TIMEZONE            = "Europe/Bucharest"
+TIMEZONE            = "Europe/Bucharest"   # stored but unused (not implemented)
 ```
+
+Timestamps are always UTC.
 
 ### Python Client (Environment Variables)
 
@@ -121,9 +125,9 @@ Each POST request appends one row:
 
 * Retries only on transient API errors (quota, temporary unavailability).
 * Maximum of 2 retries (3 attempts total).
-* Exponential backoff (1s, 3s).
+* Fixed delays of 1s, then 3s (exponential backoff is not implemented).
 
-## Idempotency
+## Idempotency (not implemented)
 
 * Optional `id` field enables deduplication.
 * Apps Script checks if `id` exists in `_metadata` sheet.

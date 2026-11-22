@@ -30,6 +30,8 @@ Send GET request:
 https://your-deployment-url/exec?secret=YOUR_SECRET&text=status%20fixed%20the%20bug
 ```
 
+Note: GET puts the secret in the query string (visible in URLs/logs); unavoidable for the watch.
+
 Or POST JSON:
 ```json
 {

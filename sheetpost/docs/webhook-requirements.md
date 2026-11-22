@@ -27,6 +27,7 @@ The Apps Script Web App exposes an HTTPS `POST` endpoint accepting JSON:
 
 #### Optional Fields
 * `id` (string): Unique request identifier for idempotency (max 100 characters).
+  Not implemented.
 
 #### Response Format
 
@@ -37,7 +38,7 @@ Success (HTTP 200):
 }
 ```
 
-Failure (HTTP 400 or 500):
+Failure (HTTP 200 in practice; real HTTP 400/500 codes are not implemented):
 ```json
 {
   "ok": false,
@@ -76,7 +77,8 @@ Ignore unknown JSON fields.
 
 The script generates the timestamp during processing.
 Timestamps are stored in UTC in ISO 8601 format (e.g., `2025-08-18T14:32:45Z`).
-The script project uses an explicitly configured timezone for logs (e.g., `Europe/Bucharest`).
+The script project uses an explicitly configured timezone for logs (e.g., `Europe/Bucharest`)
+(not implemented: the `TIMEZONE` property is stored but unused).
 
 ### 2.5 Google Sheet Storage
 
@@ -101,14 +103,14 @@ The worksheet contains these columns in order:
 * **Text**: Note content.
 * **type**: Type identifier.
 
-A hidden helper worksheet `_metadata` stores IDs for idempotency checks.
+A hidden helper worksheet `_metadata` stores IDs for idempotency checks (not implemented).
 
 #### Writing Rows
 Each request appends one row. The script must not overwrite existing rows.
 Use `LockService.getScriptLock()` around the write section to prevent race conditions.
 Do not hold the lock during validation or logging.
 
-### 2.6 Idempotency
+### 2.6 Idempotency (not implemented)
 
 If the client supplies an `id`:
 1. Check `id` in `_metadata` worksheet.
@@ -124,7 +126,7 @@ The implementation must not hard-code allowed types.
 ### 2.8 Error Handling
 
 #### Request and Validation Failures
-Return HTTP 400 for:
+Return HTTP 400 for (not implemented; errors are returned with HTTP 200 and `ok: false`):
 * Missing or invalid token.
 * Missing or empty required fields.
 * Oversized fields or request body.
@@ -137,7 +139,7 @@ Example:
 
 #### Infrastructure Failures
 If the spreadsheet is inaccessible:
-1. Return HTTP 500.
+1. Return HTTP 500 (not implemented; returned with HTTP 200 and `ok: false`).
 2. Log the failure (do not expose token or full note text).
 
 Example:
@@ -146,19 +148,20 @@ Example:
 ```
 
 #### Exceptions
-Catch all top-level exceptions and return a generic HTTP 500 error.
+Catch all top-level exceptions and return a generic HTTP 500 error (not implemented; see above).
 Log detailed diagnostics to Apps Script logs instead of exposing them to clients.
 
 ### 2.9 Retry Logic
 
-On transient sheet errors (e.g., quota limits), retry up to 2 times with exponential backoff
-(1s, then 3s).
+On transient sheet errors (e.g., quota limits), retry up to 2 times with fixed delays
+(1s, then 3s; exponential backoff is not implemented).
 Do not retry on authentication or validation failures.
 Log retry attempts.
 
 ### 2.10 Quota Limits
 
-On Sheets API quota limits (HTTP 429), return HTTP 500 with message:
+On Sheets API quota limits (HTTP 429), return HTTP 500 (not implemented; returned with HTTP
+200 and `ok: false`) with message:
 `"Google Sheets API quota exhausted, please try again later"`.
 
 ### 2.11 One-Time Self-Bootstrapping (HTTP GET)
@@ -183,7 +186,7 @@ Configuration is stored in Script Properties.
 | `WEBHOOK_TOKEN` | `<random 256-bit>` | Authentication secret |
 | `SPREADSHEET_NAME` | `My Notes` | Google Sheet file name |
 | `SHEET_NAME` | `Notes` | Worksheet tab name |
-| `TIMEZONE` | `Europe/Bucharest` | Timezone for logging |
+| `TIMEZONE` | `Europe/Bucharest` | Timezone for logging (not implemented: stored but unused) |
 
 Fallbacks:
 * `WEBHOOK_TOKEN`: Fail if missing.
@@ -211,7 +214,8 @@ Organize code into single-responsibility functions:
 * `appendEntry(sheet, row)`: Write row with lock.
 * `getOrCreateSpreadsheet(name)`: Locate or create spreadsheet.
 * `getOrCreateSheet(ss, name)`: Locate or create worksheet with headers.
-* `generateRandomToken()`: Generate 256-bit secure token.
+* `generateRandomToken()`: Generate a secure token from two UUIDv4s (~244 bits of entropy,
+  not exactly 256).
 
 ### 4.3 Logging Strategy
 

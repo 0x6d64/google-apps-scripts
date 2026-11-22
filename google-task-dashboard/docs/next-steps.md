@@ -248,7 +248,7 @@ of the dashboard data request and displays only the Top 5.
   - `ingestTaskMetricsInternal()` — unlocked core logic, assumes caller holds the lock
   - `ingestTaskMetrics()` — thin public wrapper calling `withScriptLock(TIMEOUT_TRIGGER_MS, ingestTaskMetricsInternal)`
 - Updated `deleteOldCompletedTasks()` to call `ingestTaskMetricsInternal()` for post-deletion refresh (avoids reentrancy)
-- Wrapped `deleteOldCompletedTasks()`, `syncNow()`, `syncAndClearTasks()`, `compressSheetData()` bodies with `withScriptLock()`
+- Wrapped `deleteOldCompletedTasks()`, `syncNow()`, `compressSheetData()` bodies with `withScriptLock()`
 - Defined constants: `TIMEOUT_INTERACTIVE_MS = 5000`, `TIMEOUT_TRIGGER_MS = 10000`
 - Auto-trigger: on lock timeout, logs and skips silently (retries next cycle in 3 hours)
 - Removed old debounce code: `acquireSyncLock()`, `releaseSyncLock()`, `LAST_SYNC_PROP_KEY`, `SYNC_LOCK_COOLDOWN_MS`
@@ -318,7 +318,7 @@ of the dashboard data request and displays only the Top 5.
   - Include `parent: task.parent || ''` when pushing to `overdueTasksList` (only top-level tasks reach here since subtasks have no due date).
   - Update `snapshot` object and the `sheet.appendRow([...])` call to include the two new numeric fields.
   - Update `updateTopOverdueSheet()` row mapping and column count from 7 to 8 for `parent`.
-- `Code.js` — `getDashboardData()`: extend `getRange(1, 1, lastRow, Math.max(5, lastCol))` column count from 5 to 7, parse/validate the two new numeric columns same pattern as `open`/`completed`.
+- `Code.js` — `getDashboardData()`: change `getRange(1, 1, lastRow, Math.max(5, lastCol))` to a fixed 7-column range, parse/validate the two new numeric columns same pattern as `open`/`completed`.
 - `Code.js` — `getTopOverdueTasksForDisplay()`: extend range read from 7 to 8 columns, include `parent` in returned task objects (passthrough only, no display logic).
 - `JavaScript.html` — No changes. Subtask counters remain backend-only bookkeeping.
 - `Index.html` — No changes.
@@ -353,18 +353,4 @@ in case the sheet was already shrunk by earlier runs.
 
 ## Feature requests
 
-- at the bottom of the dashboard: add a text field that can be copied from 
-  (offer a copy button). in that text field, add a "day summary" for the 
-  last 7 days.
-  - the format shall be: YYYY-MM-DD: 20/5/10/23.3 
-    (open/overdue/completed/overdue_severity). 
-    Delta: +2/-1/+1/+4
-  - the current day shall also get an entry but with the date "today so far"
-  - purpose: get a quick history
-  - the data needed shall be calculated in the ingestion loop (since its 
-    triggered automatically)
-  - if historical data needs to be stored separately: an additional sheet in 
-    the data sheet can be created
-  - if a sheet is created, historical data for 14d shall be stored and then 
-    the UI shall show the most recent 7 items
-  - the values 7 and 14 shall be configurable
+_None._
