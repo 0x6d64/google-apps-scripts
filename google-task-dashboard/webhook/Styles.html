@@ -126,6 +126,7 @@
   /* Actions */
   .header-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     align-items: center;
   }
@@ -736,6 +737,12 @@
       justify-content: center;
       padding: 8px 10px;
       font-size: 12px;
+    }
+
+    /* Whole buttons move to the next row; labels stay on one line. */
+    .header-actions .btn {
+      flex-basis: auto;
+      white-space: nowrap;
     }
 
     .controls-toolbar {

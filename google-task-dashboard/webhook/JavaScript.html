@@ -7,7 +7,6 @@
     let activeRangeDays = 30;
     let mainChartInstance = null;
     let resizeTimer = null;
-    let stalenessUpdateTimer = null;
     let lastSnapshotTime = null;
     let lastSheetFetchTime = null;
     let autoFetchEnabled = true;
@@ -43,19 +42,6 @@
       completed: '#188038',  // Green (Completed tasks)
       severity: '#a142f4'    // Purple (Severity line overlay on right axis)
     };
-
-    /**
-     * Extracts task weight from title prefix (mirrors backend implementation).
-     * Prefix rules: no prefix = 1, "!" = 2, "!!" = 3, "!!!" = 4, "!!!!" = 5.
-     * @param {string} title - Task title
-     * @return {number} - Weight (1-5)
-     */
-    function getTaskWeight(title) {
-      if (!title || typeof title !== 'string') return 1;
-      const match = title.match(/^!{1,4}/);
-      if (!match) return 1;
-      return match[0].length + 1;
-    }
 
     /**
      * Initializes Google Charts, notifications container, and fetches dashboard metrics.
@@ -152,7 +138,7 @@
      * Sets up timer to update relative age ("xx ago") every 10 seconds without fetching data.
      */
     function setupStalenessUpdateTimer() {
-      stalenessUpdateTimer = setInterval(() => {
+      setInterval(() => {
         if (lastSnapshotTime) {
           updateStalenessDisplay();
         }
@@ -278,9 +264,11 @@
       bubble.className = 'notification-bubble ' + type;
       bubble.innerHTML = `
         <span class="notification-icon">${icon}</span>
-        <span class="notification-text">${message}</span>
+        <span class="notification-text"></span>
         <button class="notification-dismiss" title="Dismiss">×</button>
       `;
+
+      bubble.querySelector('.notification-text').textContent = message;
 
       const dismissBtn = bubble.querySelector('.notification-dismiss');
       if (dismissBtn) {
@@ -495,13 +483,6 @@
     }
 
     /**
-     * Calculates task addition rate over the selected historical window.
-     * Addition rate = (open_start - open_end + completed_in_period) / days_elapsed
-     * @param {Array<Array<any>>} rows - All snapshot rows
-     * @param {number|string} rangeDays - Selected range (3, 7, 14, 30, or 'all')
-     * @return {number} - Tasks added per day
-     */
-    /**
      * Filters rows to a time window without modifying the original array.
      * @param {Array<Array<any>>} rows - All snapshot rows
      * @param {number|string} rangeDays - Range (3, 7, 14, 30, or 'all')
@@ -538,6 +519,13 @@
       return Math.max(0, oldestOpen - newestOpen + completedInPeriod);
     }
 
+    /**
+     * Calculates task addition rate over the selected historical window.
+     * Addition rate = (open_start - open_end + completed_in_period) / days_elapsed
+     * @param {Array<Array<any>>} rows - All snapshot rows
+     * @param {number|string} rangeDays - Selected range (3, 7, 14, 30, or 'all')
+     * @return {number} - Tasks added per day
+     */
     function calculateAdditionRate(rows, rangeDays) {
       if (!rows || rows.length < 2) return 0;
 
@@ -657,13 +645,12 @@
         
         if (label) {
           label.textContent = estimate;
-          // Use a smaller font for text-based values so they fit on one line
-          label.classList.toggle('value-compact', isNaN(Number(estimate)));
-          
           // Apply status coloring based on numeric ETA
           const numDays = parseFloat(estimate);
           const statusClass = getETAStatusClass(numDays);
           label.className = 'value ' + statusClass;
+          // Use a smaller font for text-based values so they fit on one line
+          label.classList.toggle('value-compact', isNaN(Number(estimate)));
           estCard.className = 'card card-purple ' + statusClass;
         }
         
@@ -672,7 +659,7 @@
             note.textContent = 'Adding ~' + additionRate.toFixed(1) + '/day vs completing ~' + completionRate.toFixed(1) + '/day';
           } else {
             const rangeLabel = activeRangeDays === 'all' ? 'all time' : activeRangeDays + ' days';
-            note.textContent = 'Based on rates over past ' + rangeLabel;
+            note.textContent = 'Days left, based on rates over past ' + rangeLabel;
           }
         }
         
@@ -1110,10 +1097,6 @@
         backgroundColor: 'transparent'
       };
 
-      if (!mainChartInstance) {
-        mainChartInstance = new google.visualization.ComboChart(chartContainer);
-      }
-
       google.visualization.events.addListener(mainChartInstance, 'ready', () => {
         renderWeekendBands(mainChartInstance, dataTable, chartContainer);
       });
@@ -1208,7 +1191,6 @@
       google.script.run
         .withSuccessHandler((data) => {
           setButtonsDisabled(false);
-          showStatus('Data reloaded successfully!', 'success');
           showNotification('Data Reloaded\nRefreshing dashboard...', '🔄', 'success', 2000);
           onDataLoaded(data);
         })
@@ -1225,11 +1207,11 @@
      */
     function refreshDashboardData() {
       google.script.run
-        .withSuccessHandler((data) => {
-          onDataLoaded(data);
-        })
+        .withSuccessHandler(onDataLoaded)
         .withFailureHandler((err) => {
           console.error('Auto-refresh error:', err);
+          const msg = (err && (err.message || err.toString())) || 'Unknown server error';
+          showStatus('Dashboard refresh failed: ' + msg, 'error');
         })
         .getDashboardData();
     }
@@ -1250,7 +1232,6 @@
             return;
           }
           const data = result.data;
-          showStatus('Sync completed successfully!', 'success');
           if (data && data.rows && data.rows.length > 0) {
             const latest = data.rows[data.rows.length - 1];
             showNotification(`Sync Complete\n${latest[1]} open, ${latest[3]} overdue`, '✅', 'success', 3000);
@@ -1289,7 +1270,6 @@
             return;
           }
 
-          showStatus(`Deleted ${result.tasksDeleted} old completed tasks. Refreshing dashboard...`, 'success');
           showNotification(`Old Completed Tasks Deleted\n${result.tasksDeleted} tasks removed (>8w)`, '🗑️', 'success', 4000);
           if (result.data) {
             onDataLoaded(result.data);
@@ -1304,9 +1284,6 @@
         .deleteOldCompletedTasks(8);
     }
 
-    /**
-     * Triggers Sync & Clear Completed Tasks RPC with confirmation.
-     */
     /**
      * Triggers manual pruning of records older than 1 year to 1 per day.
      */
@@ -1401,10 +1378,11 @@
             <div class="modal-stat"><div class="stat-value">${result.durationMs}ms</div><div class="stat-label">Took</div></div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-primary" onclick="document.getElementById('downsampleResultModal').remove()">Close</button>
+            <button class="btn btn-primary">Close</button>
           </div>
         </div>
       `;
+      modal.querySelector('button').addEventListener('click', () => modal.remove());
       document.body.appendChild(modal);
     }
 
@@ -1430,10 +1408,11 @@
             <div class="modal-stat"><div class="stat-value">${result.durationMs}ms</div><div class="stat-label">Took</div></div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-primary" onclick="document.getElementById('pruneResultModal').remove()">Close</button>
+            <button class="btn btn-primary">Close</button>
           </div>
         </div>
       `;
+      modal.querySelector('button').addEventListener('click', () => modal.remove());
       document.body.appendChild(modal);
     }
 
@@ -1455,7 +1434,11 @@
           const triggerBox = document.getElementById('toggleAutoTrigger');
           if (triggerBox) triggerBox.checked = isActive;
         })
-        .withFailureHandler(onDataError)
+        .withFailureHandler((err) => {
+          const triggerBox = document.getElementById('toggleAutoTrigger');
+          if (triggerBox) triggerBox.checked = !enable;
+          onDataError(err);
+        })
         .setTriggerEnabled(enable);
     }
 
@@ -1556,15 +1539,7 @@
 
     // Public API
     return {
-      init: init,
-      setRangeFilter: setRangeFilter,
-      updateChartVisibility: updateChartVisibility,
-      handleReloadData: handleReloadData,
-      handleSyncNow: handleSyncNow,
-      handleDeleteOldCompletedTasks: handleDeleteOldCompletedTasks,
-      handleDownsampleLastYear: handleDownsampleLastYear,
-      handlePruneOldData: handlePruneOldData,
-      handleTriggerToggle: handleTriggerToggle
+      init: init
     };
   })();
 

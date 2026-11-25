@@ -98,10 +98,10 @@ auth = sufficient security.
   snapshots, not fixed interval.
 - Top Overdue section: displays the top 5 most severe overdue tasks from the
   Top Overdue sheet (which stores up to 20). Each task shows
-  title, overdue duration, and individual severity, plus an `Open Google Tasks`
-  action. Section is hidden when no overdue tasks are available.
-- Backlog ETA uses a neutral indigo/blue treatment distinct from the red
-  Overdue KPI.
+  title, overdue duration, and individual severity. Section is hidden when no
+  overdue tasks are available.
+- Backlog ETA card uses status colors: green (<=14 days), yellow (<=30 days),
+  red (>30 days).
 - Backlog ETA card: shown only if `completion_rate > addition_rate` and
   `open > 0`; else hidden / "Cannot estimate". Recalculates on range change.
 - Snapshot age and sheet-fetch age shown separately, both self-updating
