@@ -34,7 +34,7 @@
         <a href="https://calendar.google.com/calendar/u/0/r/tasks" target="_blank" class="btn btn-secondary" title="Open Google Tasks in Google Calendar">
           <span class="btn-icon" aria-hidden="true">🔗</span> Launch Google Tasks
         </a>
-        <button id="btnSyncNow" class="btn btn-secondary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts.">
+        <button id="btnSyncNow" class="btn btn-secondary" title="Immediately fetch real-time task counts across all your Google Task lists, calculate debt metrics, append a new snapshot row to the Google Sheet, and update the charts. If auto-delete is on, old completed tasks are removed.">
           <span class="btn-icon" aria-hidden="true">⚡</span> Ingest From Tasks
         </button>
         <button id="btnReloadData" class="btn btn-primary" title="Reload time-series metrics directly from the Google Sheet without calling the Google Tasks API. Use this to view recent background auto-syncs.">
@@ -55,9 +55,10 @@
       </div>
 
       <div class="card card-green">
-        <div class="label">Completed Work Units</div>
+        <div class="label">Completed in Range</div>
         <div class="value" id="kpiCompleted">-</div>
         <div class="subtext" id="kpiVelocitySubtext">24h: - &nbsp; 3d: - &nbsp; 7d: - /day</div>
+        <div class="subtext" id="kpiCompletedTotal"></div>
       </div>
 
       <div class="card card-red">
@@ -170,10 +171,16 @@
             </div>
           </div>
 
+          <div class="danger-zone-setting">
+            <label class="trigger-toggle-label" title="Every ingest deletes up to 50 tasks completed more than 8 weeks ago from Google Tasks.">
+              <input type="checkbox" id="toggleAutoDelete">
+              <strong>Auto-delete completed tasks older than 8 weeks</strong>
+            </label>
+            <p class="setting-desc">Permanently removes up to 50 old tasks on every ingest. Their count is kept, so completion statistics stay intact.</p>
+            <p class="setting-desc" id="autoDeleteSummary"></p>
+          </div>
+
           <div class="danger-zone-actions">
-            <button id="btnDeleteOldCompleted" class="btn btn-secondary" title="Delete tasks completed more than 8 weeks ago from Google Tasks across all lists, keeping recent completed tasks intact.">
-              <span class="btn-icon" aria-hidden="true">🗑️</span> Delete Old Done Tasks (>8w)
-            </button>
             <button id="btnDownsampleLastYear" class="btn btn-secondary" title="Downsample snapshot rows from the last 365 days with an age-based policy (latest wins): 1 entry per 30 minutes (0-3 days), per 60 minutes (3-7 days), per 3 hours (7-365 days). Permanently removes redundant snapshots.">
               <span class="btn-icon" aria-hidden="true">📉</span> Downsample Last Year
             </button>

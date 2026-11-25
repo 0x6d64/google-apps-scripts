@@ -162,7 +162,7 @@ from the moon on the left.
 ## 7. UI layer and mobile
 
 Card transparency per §4. Danger Zone collapsed by default, ordered by
-destructive impact: Delete Old Done (>8w) → Downsample → Prune (>1y).
+destructive impact: Downsample → Prune (>1y), below the auto-delete switch.
 Confirmation dialogs + result modals for destructive actions.
 
 Mobile (≤640px): raise panel opacity (`rgba(240,248,255,0.92)`,

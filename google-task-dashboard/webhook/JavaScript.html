@@ -77,10 +77,10 @@
 
       on('btnSyncNow', 'click', handleSyncNow);
       on('btnReloadData', 'click', handleReloadData);
-      on('btnDeleteOldCompleted', 'click', handleDeleteOldCompletedTasks);
       on('btnDownsampleLastYear', 'click', handleDownsampleLastYear);
       on('btnPruneOldData', 'click', handlePruneOldData);
       on('toggleAutoTrigger', 'change', (e) => handleTriggerToggle(e.target.checked));
+      on('toggleAutoDelete', 'change', (e) => handleAutoDeleteToggle(e.target.checked));
 
       ['toggleOpen', 'toggleOverdue', 'toggleCompleted', 'toggleSeverity', 'toggleRollingAvg']
         .forEach((id) => on(id, 'change', updateChartVisibility));
@@ -391,6 +391,12 @@
         triggerBox.checked = (typeof data.triggerActive === 'boolean') ? data.triggerActive : true;
       }
 
+      const deleteBox = document.getElementById('toggleAutoDelete');
+      if (deleteBox) deleteBox.checked = data.autoDeleteActive === true;
+      setElemText('autoDeleteSummary', typeof data.deletedTaskCount === 'number'
+        ? data.deletedTaskCount + ' tasks deleted automatically so far.'
+        : '');
+
       updateKPIsAndStaleness();
       renderCharts();
       renderTopOverdueTasks(data.topOverdueTasksTopX || []);
@@ -418,14 +424,13 @@
       const latest = rows[rows.length - 1];
 
       const totalOpen = typeof latest[1] === 'number' ? latest[1] : 0;
-      const completed = typeof latest[2] === 'number' ? latest[2] : 0;
       const overdue = typeof latest[3] === 'number' ? latest[3] : 0;
       const severity = typeof latest[4] === 'number' ? latest[4] : 0;
       const onTime = Math.max(0, totalOpen - overdue);
 
       setElemText('kpiOpen', totalOpen);
       setElemText('kpiOpenSubtext', onTime + ' on-time + ' + overdue + ' overdue');
-      setElemText('kpiCompleted', completed);
+      updateCompletedKpi(rows);
       setElemText('kpiOverdue', overdue);
       setElemText('kpiSeverity', severity.toFixed(1));
 
@@ -437,6 +442,17 @@
 
       calculateVelocity(rows);
       updateBacklogEstimate(rows);
+    }
+
+    /**
+     * Completed card: work finished within the range, plus the stored total.
+     * @param {Array<Array<any>>} rows
+     */
+    function updateCompletedKpi(rows) {
+      const latest = rows[rows.length - 1];
+      setElemText('kpiCompleted',
+        calculateCompletionsInWindow(getWindowRows(rows, activeRangeDays)));
+      setElemText('kpiCompletedTotal', (latest[2] || 0) + ' total incl. deleted');
     }
 
     /**
@@ -1114,7 +1130,7 @@
       dataTable.addColumn('datetime', 'Time');
       dataTable.addColumn('number', 'On-Time Open');
       dataTable.addColumn('number', 'Overdue');
-      dataTable.addColumn('number', 'Completed');
+      dataTable.addColumn('number', 'Completed (in range)');
       dataTable.addColumn('number', 'Overdue Severity (√days)');
 
       const now = Date.now();
@@ -1143,6 +1159,17 @@
         validRows.push([dateObj, onTimeOpen, overdue, completed, severity]);
       }
 
+      // Completed counts from 0 at the start of the range. Only increases are
+      // added (as for velocity), so the line never drops.
+      let previous = null;
+      let inRange = 0;
+      for (const row of validRows) {
+        const total = row[3];
+        if (previous !== null) inRange += Math.max(0, total - previous);
+        previous = total;
+        row[3] = inRange;
+      }
+
       // Apply downsampling for large datasets
       const downsampledRows = downsampleData(validRows, DOWNSAMPLE_TARGET_BUCKETS);
       dataTable.addRows(downsampledRows);
@@ -1165,6 +1192,7 @@
 
       // Recalculate KPIs (velocity, backlog estimate) when range changes
       if (rawData && rawData.rows && rawData.rows.length > 0) {
+        updateCompletedKpi(rawData.rows);
         calculateVelocity(rawData.rows);
         updateBacklogEstimate(rawData.rows);
 
@@ -1234,7 +1262,11 @@
           const data = result.data;
           if (data && data.rows && data.rows.length > 0) {
             const latest = data.rows[data.rows.length - 1];
-            showNotification(`Sync Complete\n${latest[1]} open, ${latest[3]} overdue`, '✅', 'success', 3000);
+            const deleted = result.deletedThisRun
+              ? `, ${result.deletedThisRun} old tasks deleted`
+              : '';
+            showNotification(`Sync Complete\n${latest[1]} open, ${latest[3]} overdue${deleted}`,
+              '✅', 'success', 3000);
           }
           onDataLoaded(data);
         })
@@ -1243,45 +1275,6 @@
           onDataError(err);
         })
         .syncNow();
-    }
-
-    /**
-     * Deletes tasks completed more than 8 weeks ago from Google Tasks across all lists.
-     */
-    function handleDeleteOldCompletedTasks() {
-      const confirmed = confirm(
-        '⚠️ DELETE OLD COMPLETED TASKS (>8 WEEKS)\n\n' +
-        'This will permanently delete tasks that were completed more than 8 weeks ago across all your Google Task lists.\n\n' +
-        'Recent completed tasks (<8 weeks) will be kept intact.\n\n' +
-        'Proceed?'
-      );
-      if (!confirmed) return;
-
-      setButtonsDisabled(true);
-      showStatus('Deleting tasks completed > 8 weeks ago across all lists...', 'info');
-
-      google.script.run
-        .withSuccessHandler((result) => {
-          setButtonsDisabled(false);
-          if (!result || !result.success) {
-            const errMsg = (result && result.error) || 'Unknown error';
-            showStatus('Delete failed: ' + errMsg, 'error');
-            showNotification(`Delete failed\n${errMsg}`, '❌', 'error', 5000);
-            return;
-          }
-
-          showNotification(`Old Completed Tasks Deleted\n${result.tasksDeleted} tasks removed (>8w)`, '🗑️', 'success', 4000);
-          if (result.data) {
-            onDataLoaded(result.data);
-          } else {
-            fetchData();
-          }
-        })
-        .withFailureHandler((err) => {
-          setButtonsDisabled(false);
-          onDataError(err);
-        })
-        .deleteOldCompletedTasks(8);
     }
 
     /**
@@ -1442,15 +1435,43 @@
         .setTriggerEnabled(enable);
     }
 
+    /**
+     * Switches automatic deletion of old completed tasks. Enabling asks first.
+     * @param {boolean} enable
+     */
+    function handleAutoDeleteToggle(enable) {
+      const box = document.getElementById('toggleAutoDelete');
+      const revert = () => { if (box) box.checked = !enable; };
+
+      if (enable && !confirm(
+        '⚠️ AUTO-DELETE OLD COMPLETED TASKS\n\n' +
+        'Every ingest, including the background sync, will permanently delete up to 50 tasks ' +
+        'completed more than 8 weeks ago, without asking again.\n\n' +
+        'Enable?')) {
+        revert();
+        return;
+      }
+
+      google.script.run
+        .withSuccessHandler((isActive) => {
+          if (box) box.checked = isActive;
+          showNotification(isActive ? 'Auto-delete Enabled\nStarts with the next ingest'
+            : 'Auto-delete Disabled', isActive ? '🗑️' : '🛑', 'success', 3000);
+        })
+        .withFailureHandler((err) => {
+          revert();
+          onDataError(err);
+        })
+        .setAutoDeleteEnabled(enable);
+    }
+
     function setButtonsDisabled(disabled) {
       const btnSync = document.getElementById('btnSyncNow');
       const btnReload = document.getElementById('btnReloadData');
-      const btnDeleteOld = document.getElementById('btnDeleteOldCompleted');
       const btnDownsample = document.getElementById('btnDownsampleLastYear');
       const btnPrune = document.getElementById('btnPruneOldData');
       if (btnSync) btnSync.disabled = disabled;
       if (btnReload) btnReload.disabled = disabled;
-      if (btnDeleteOld) btnDeleteOld.disabled = disabled;
       if (btnDownsample) btnDownsample.disabled = disabled;
       if (btnPrune) btnPrune.disabled = disabled;
     }
