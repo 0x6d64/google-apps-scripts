@@ -57,8 +57,8 @@ auth = sufficient security.
   snapshot row written) if any task list fails to load, so partial data never
   lands in the sheet.
 - `getDashboardData()` — read Sheet only, no Tasks API call
-- `deleteOldCompletedTasks(cutoffWeeks=8)` — delete completed tasks
-  older than cutoff, keep recent ones, re-ingest after
+- Auto-delete (see below); `dryRunAutoDelete()` from the script editor logs
+  what the next run would delete, without changing anything
 - `downsampleLastYearToHourly()` — collapse last-365-day rows using the
   configured age-based downsampling policy, latest-wins
 - During `ingestTaskMetrics()`, calculate the top 20 overdue open tasks
@@ -75,10 +75,30 @@ auth = sufficient security.
   (UTC); abort if >80% of rows would be deleted; return stats
   (`totalBefore/After/Pruned/durationMs`)
 
+### Auto-delete of old completed tasks
+
+- Switch in the Danger Zone, script property `AUTO_DELETE_OLD_ENABLED`, off
+  by default; enabling asks for confirmation
+- When on, the 3h trigger and "Ingest From Tasks" delete tasks completed more
+  than 8 weeks ago, oldest first, at most 50 per run. The first-load ingest
+  never deletes (it runs without the lock)
+- A parent is only deleted when every subtask it still has is deleted in the
+  same run, subtasks first
+- Nothing is deleted if any task list fails to load
+- Stops early to stay within the Apps Script 6-minute limit
+- `Counters` sheet (`key, value, updated_at`): `deleted_completed_units` and
+  `deleted_subtask_units` (priority-weighted), `deleted_task_count`,
+  `last_run_deleted_count`. An unreadable value stops the ingest
+- Snapshots store `completed = present + deleted_completed_units` (same for
+  `subtasks_completed`), so completion statistics survive deletion
+- Counters are written before the snapshot. If a run dies between deleting and
+  writing them, that interval's completions can be lost
+- A deleted task that is restored would be counted twice
+
 ### Concurrency & locking
 
-- All mutation operations (`ingestTaskMetrics`, `deleteOldCompletedTasks`,
-  `compressSheetData` / prune / downsample, `syncNow`) use
+- All mutation operations (`ingestTaskMetrics`, `compressSheetData` / prune /
+  downsample, `syncNow`) use
   `LockService.getScriptLock()` for true mutual exclusion across all execution
   contexts (manual triggers, automated cron, maintenance operations).
 - Lock acquisition uses `tryLock(timeoutMs)` with two timeout tiers:
@@ -95,6 +115,8 @@ auth = sufficient security.
 
 - Cards: Open, Completed, Overdue, Overdue Severity (1 decimal, backend
   value unaffected)
+- The Completed card shows completions within the selected range, with the
+  stored total (including deleted tasks) in small text
 - Velocity: 24h / 3d / 7d completion throughput. Sum positive deltas only
   (ignore drops from purge/delete). Use actual elapsed time between
   snapshots, not fixed interval.
@@ -118,6 +140,8 @@ auth = sufficient security.
 - Primary chart: stacked area (Overdue → On-Time Open → Completed, in that
   order) + Severity as independent line on secondary axis
 - Series toggle checkboxes control visibility of all 4 series independently
+- Completed is drawn relative to the selected range: it starts at 0 and adds
+  positive changes only. For "All" it therefore ends below the card's total
 - Range filter: 1D / 3D / 7D / 14D / 30D / All, client-side (no backend call)
 - Downsampling: long ranges binned to ~50 buckets for render only; KPIs use
   full data
@@ -132,8 +156,8 @@ auth = sufficient security.
 - View Sheet (link), Launch Google Tasks (link), Fetch Data From Sheet
   (Sheet only), Ingest From Tasks (Tasks API + append + refresh)
 - Danger Zone: collapsed by default, ordered by destructive impact
-  (highest→lowest): Delete Old Done (>8w) → Downsample Last Year →
-  Prune Old Data (>1y)
+  (highest→lowest): Downsample Last Year → Prune Old Data (>1y). The
+  auto-delete switch sits above these buttons
 - Auto-fetch (Sheet only, never Tasks API): toggle + interval (15/30/60min),
   default on. Pauses when tab hidden. On refocus, fetch immediately if
   interval elapsed while hidden, then resume timer.

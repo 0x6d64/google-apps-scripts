@@ -407,6 +407,26 @@ was always neutral and 30D/All read backwards.
 
 ---
 
+### 18. Delete old completed tasks automatically
+
+✅ **DONE**
+
+**Implementation:** Ingestion deletes completed tasks older than 8 weeks when
+switched on. A `Counters` sheet keeps the deleted totals, which are added to
+`completed` so completion statistics are unaffected.
+
+**Changes:**
+- Switch (off by default), 50 deletions per run, subtask-safe selection
+- `dryRunAutoDelete()` for checking from the script editor
+- Removed the manual delete button and `deleteOldCompletedTasks()`
+- Chart and Completed card show completions within the selected range
+
+**Files:** Code.js, JavaScript.html, Index.html, preview/mock.html
+
+**Effort:** M ✓
+
+---
+
 ## Feature requests
 
 _None._

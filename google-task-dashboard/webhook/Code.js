@@ -19,6 +19,20 @@ const NEAR_TERM_MAX_AGE_DAYS = 7;
 const NEAR_TERM_INTERVAL_MINUTES = 60;
 const HISTORICAL_MAX_AGE_DAYS = 365;
 const HISTORICAL_INTERVAL_HOURS = 3;
+const AUTO_DELETE_PROP_KEY = 'AUTO_DELETE_OLD_ENABLED'; // missing means off
+const DELETE_CUTOFF_WEEKS = 8;
+const DELETE_MAX_PER_RUN = 50;
+// Apps Script kills runs after 6 minutes; stop deleting well before that.
+const DELETE_START_LIMIT_MS = 3.5 * 60 * 1000;
+const DELETE_STOP_LIMIT_MS = 4.5 * 60 * 1000;
+const COUNTERS_SHEET_NAME = 'Counters';
+const COUNTERS_HEADERS = ['key', 'value', 'updated_at'];
+const COUNTER_KEYS = [
+  'deleted_completed_units', // priority-weighted, added to `completed`
+  'deleted_subtask_units', // priority-weighted, added to `subtasks_completed`
+  'deleted_task_count',
+  'last_run_deleted_count'
+];
 
 /**
  * Serves the web dashboard HTML interface.
@@ -293,7 +307,6 @@ function newMetricsAccumulator(now) {
 
 /**
  * Accumulates a single task into the metrics accumulator.
- * Shared by ingestion and the delete-old maintenance pass.
  */
 function accumulateTask(acc, task, listId, listTitle) {
   const weight = getTaskWeight(task.title);
@@ -367,10 +380,15 @@ function snapshotFromAccumulator(acc) {
 
 /**
  * Persists an accumulator as a new snapshot row + top overdue sheet.
+ * Completed columns include the work already deleted from Google Tasks.
+ * @param {Object} acc - Filled accumulator
+ * @param {Object} counters - Counter values by key
  * @return {Object} Snapshot object
  */
-function persistSnapshot(acc) {
+function persistSnapshot(acc, counters) {
   const snapshot = snapshotFromAccumulator(acc);
+  snapshot.completed += counters.deleted_completed_units;
+  snapshot.subtasks_completed += counters.deleted_subtask_units;
 
   const sheet = getOrCreateSheet();
   sheet.appendRow([
@@ -413,30 +431,252 @@ function isOldCompletedTask(task, cutoffDate) {
 }
 
 /**
+ * Retrieves or creates the Counters sheet, initialized with zeros.
+ * @return {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function getOrCreateCountersSheet() {
+  const spreadsheet = getOrCreateSheet().getParent();
+  let sheet = spreadsheet.getSheetByName(COUNTERS_SHEET_NAME);
+
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(COUNTERS_SHEET_NAME);
+    sheet.appendRow(COUNTERS_HEADERS);
+    COUNTER_KEYS.forEach(key => sheet.appendRow([key, 0, '']));
+    sheet.setFrozenRows(1);
+  }
+
+  return sheet;
+}
+
+/**
+ * Reads the counters. Missing keys count as 0. An unreadable value throws,
+ * because treating it as 0 would silently lower `completed`.
+ * @return {Object} Counter values by key
+ */
+function readCounters() {
+  const sheet = getOrCreateCountersSheet();
+  const counters = {};
+  COUNTER_KEYS.forEach(key => { counters[key] = 0; });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return counters;
+
+  sheet.getRange(2, 1, lastRow - 1, 2).getValues().forEach(([key, value]) => {
+    if (COUNTER_KEYS.indexOf(key) === -1) return;
+    if (value === '' || !isFinite(Number(value)) || Number(value) < 0) {
+      throw new Error('Counters sheet: invalid value for ' + key + ': "' + value + '"');
+    }
+    counters[key] = Number(value);
+  });
+
+  return counters;
+}
+
+/**
+ * Writes all counters in one call and flushes immediately.
+ * @param {Object} counters - Counter values by key
+ * @param {Date} now
+ */
+function writeCounters(counters, now) {
+  const rows = COUNTER_KEYS.map(key => [key, counters[key], now.toISOString()]);
+  getOrCreateCountersSheet().getRange(2, 1, rows.length, COUNTERS_HEADERS.length).setValues(rows);
+  SpreadsheetApp.flush();
+}
+
+/**
+ * Scans all tasks. With a cutoff, old completed tasks are returned as deletion
+ * candidates and NOT accumulated; the caller accumulates those that survive.
+ * @param {Object} acc - Accumulator to fill
+ * @param {Date|null} cutoffDate - null accumulates everything
+ * @return {Object} {complete, candidates, childCounts}
+ */
+function scanTasks(acc, cutoffDate) {
+  const candidates = [];
+  const childCounts = {}; // 'listId/parentId' -> number of subtasks present
+
+  const complete = forEachTaskInAllLists((task, listId, listTitle) => {
+    if (task.deleted) return;
+    if (task.parent) {
+      const key = listId + '/' + task.parent;
+      childCounts[key] = (childCounts[key] || 0) + 1;
+    }
+    if (cutoffDate && isOldCompletedTask(task, cutoffDate)) {
+      candidates.push({ task: task, listId: listId, listTitle: listTitle });
+      return;
+    }
+    accumulateTask(acc, task, listId, listTitle);
+  });
+
+  return { complete: complete, candidates: candidates, childCounts: childCounts };
+}
+
+/**
+ * Picks at most `max` candidates, oldest first. A parent is only picked when
+ * every subtask it still has is picked too, and comes after all subtasks, so it
+ * never matters whether deleting a parent also deletes its subtasks.
+ * @return {Array<Object>} Candidates in deletion order
+ */
+function selectTasksToDelete(candidates, childCounts, max) {
+  const age = item => new Date(item.task.completed || item.task.updated).getTime();
+  const sorted = candidates.slice().sort((a, b) => age(a) - age(b));
+  const isParent = item => !!childCounts[item.listId + '/' + item.task.id];
+
+  const selected = sorted.filter(item => !isParent(item)).slice(0, max);
+
+  const pickedChildren = {};
+  selected.forEach(item => {
+    if (!item.task.parent) return;
+    const key = item.listId + '/' + item.task.parent;
+    pickedChildren[key] = (pickedChildren[key] || 0) + 1;
+  });
+
+  const parents = sorted.filter(item => {
+    const key = item.listId + '/' + item.task.id;
+    return isParent(item) && pickedChildren[key] === childCounts[key];
+  });
+
+  return selected.concat(parents.slice(0, max - selected.length));
+}
+
+/**
+ * Deletes the selected old tasks and accumulates every candidate that remains.
+ * @return {Object} {count, units, subtaskUnits} actually deleted
+ */
+function deleteOldTasks(acc, scan, startMs) {
+  const deleted = { count: 0, units: 0, subtaskUnits: 0 };
+  const removed = new Set();
+  const childrenLeft = Object.assign({}, scan.childCounts);
+
+  const selected = Date.now() - startMs < DELETE_START_LIMIT_MS
+    ? selectTasksToDelete(scan.candidates, scan.childCounts, DELETE_MAX_PER_RUN)
+    : [];
+
+  for (let i = 0; i < selected.length; i++) {
+    if (Date.now() - startMs > DELETE_STOP_LIMIT_MS) break;
+    const item = selected[i];
+    // A subtask failed to delete: keep its parent.
+    if (childrenLeft[item.listId + '/' + item.task.id]) continue;
+
+    try {
+      Tasks.Tasks.remove(item.listId, item.task.id);
+    } catch (err) {
+      Logger.log('Failed to delete task ' + item.task.id + ': ' + err);
+      continue;
+    }
+
+    removed.add(item);
+    const weight = getTaskWeight(item.task.title);
+    deleted.count++;
+    deleted.units += weight;
+    if (item.task.parent) {
+      deleted.subtaskUnits += weight;
+      childrenLeft[item.listId + '/' + item.task.parent]--;
+    }
+  }
+
+  scan.candidates
+    .filter(item => !removed.has(item))
+    .forEach(item => accumulateTask(acc, item.task, item.listId, item.listTitle));
+
+  return deleted;
+}
+
+/**
+ * @return {Date} Tasks completed before this are old enough to delete.
+ */
+function getDeleteCutoff(now) {
+  return new Date(now.getTime() - DELETE_CUTOFF_WEEKS * 7 * 24 * 60 * 60 * 1000);
+}
+
+/**
  * Internal metrics ingestion logic (assumes caller holds the lock).
- * Fetches all tasks, calculates metrics, persists snapshot and top overdue.
+ * Fetches all tasks, deletes old completed tasks if allowed and switched on,
+ * then persists the snapshot and top overdue.
  * Tasks due more than 6 months in the future are intentionally excluded
  * from all counts to keep metrics focused on actionable work.
- * @return {Object} - snapshot object {timestamp, open, completed, overdue, overdue_severity}
+ * @param {Object} [options] - {allowDelete: boolean}; only pass true under the lock
+ * @return {Object} - snapshot object plus deletedThisRun
  */
-function ingestTaskMetricsInternal() {
-  const acc = newMetricsAccumulator(new Date());
-  const complete = forEachTaskInAllLists((task, listId, listTitle) => accumulateTask(acc, task, listId, listTitle));
-  if (!complete) {
+function ingestTaskMetricsInternal(options) {
+  const startMs = Date.now();
+  const now = new Date();
+  const counters = readCounters();
+  const deleting = !!(options && options.allowDelete) && isAutoDeleteEnabled();
+
+  const acc = newMetricsAccumulator(now);
+  const scan = scanTasks(acc, deleting ? getDeleteCutoff(now) : null);
+  if (!scan.complete) {
     // Never persist partial data: it would show up as a bogus drop in the charts.
     throw new Error('Could not read all task lists; snapshot skipped.');
   }
-  return persistSnapshot(acc);
+
+  let deletedThisRun = 0;
+  if (deleting) {
+    const deleted = deleteOldTasks(acc, scan, startMs);
+    deletedThisRun = deleted.count;
+
+    if (deleted.count > 0 || counters.last_run_deleted_count > 0) {
+      counters.deleted_completed_units += deleted.units;
+      counters.deleted_subtask_units += deleted.subtaskUnits;
+      counters.deleted_task_count += deleted.count;
+      counters.last_run_deleted_count = deleted.count;
+      // Logged first so the totals can be restored by hand if the write fails.
+      Logger.log('[AUTO_DELETE] Deleted ' + deleted.count + ' tasks. Counters: ' +
+        JSON.stringify(counters));
+      // Saved before the snapshot: it is the record of what is really gone.
+      writeCounters(counters, now);
+    }
+  }
+
+  const snapshot = persistSnapshot(acc, counters);
+  snapshot.deletedThisRun = deletedThisRun;
+  return snapshot;
 }
 
 /**
  * Public entry point for metrics ingestion (locking wrapper).
- * Acquires script lock before delegating to ingestTaskMetricsInternal.
- * Used by manual sync trigger and automated background sync.
+ * Used by the automated background sync.
  * @return {Object} - {success: true, result: snapshot} or {success: false, error: string}
  */
 function ingestTaskMetrics() {
-  return withScriptLock(TIMEOUT_TRIGGER_MS, ingestTaskMetricsInternal);
+  return withScriptLock(TIMEOUT_TRIGGER_MS,
+    () => ingestTaskMetricsInternal({ allowDelete: true }));
+}
+
+/**
+ * Run from the script editor: logs what auto-delete would remove on the next
+ * ingest. Changes nothing and works whether or not the switch is on.
+ */
+function dryRunAutoDelete() {
+  const now = new Date();
+  const scan = scanTasks(newMetricsAccumulator(now), getDeleteCutoff(now));
+  if (!scan.complete) throw new Error('Could not read all task lists.');
+
+  const selected = selectTasksToDelete(scan.candidates, scan.childCounts, DELETE_MAX_PER_RUN);
+  Logger.log('[DRY_RUN] ' + scan.candidates.length + ' old completed tasks, ' +
+    selected.length + ' would be deleted in the next run.');
+  selected.forEach(item => {
+    Logger.log('[DRY_RUN] ' + item.listTitle + ' | ' + (item.task.completed || item.task.updated) +
+      (item.task.parent ? ' | subtask | ' : ' | ') + item.task.title);
+  });
+}
+
+/**
+ * @return {boolean} Whether ingests delete old completed tasks.
+ */
+function isAutoDeleteEnabled() {
+  return PropertiesService.getScriptProperties().getProperty(AUTO_DELETE_PROP_KEY) === 'true';
+}
+
+/**
+ * Switches automatic deletion of old completed tasks on or off.
+ * @param {boolean} enable
+ * @return {boolean} New state
+ */
+function setAutoDeleteEnabled(enable) {
+  PropertiesService.getScriptProperties()
+    .setProperty(AUTO_DELETE_PROP_KEY, enable ? 'true' : 'false');
+  return !!enable;
 }
 
 /**
@@ -493,7 +733,7 @@ function getDashboardData(isRetry) {
     if (isRetry) {
       throw new Error('Metrics sheet is still empty after initial ingestion.');
     }
-    // Auto-init: call internal version directly (no locking needed since this is a single execution)
+    // Auto-init: runs without the lock, so it must never delete tasks.
     ingestTaskMetricsInternal();
     return getDashboardData(true);
   }
@@ -532,8 +772,26 @@ function getDashboardData(isRetry) {
     rows: validRows,
     sheetUrl: sheetUrl,
     triggerActive: isTriggerActive(),
+    autoDeleteActive: isAutoDeleteEnabled(),
+    deletedTaskCount: getDeletedTaskCount(),
     topOverdueTasksTopX: topOverdueTasksForDisplay
   };
+}
+
+/**
+ * Number of tasks deleted so far, without creating the Counters sheet.
+ * @return {number|null} null if it cannot be read
+ */
+function getDeletedTaskCount() {
+  try {
+    const spreadsheet = getOrCreateSheet().getParent();
+    return spreadsheet.getSheetByName(COUNTERS_SHEET_NAME)
+      ? readCounters().deleted_task_count
+      : 0;
+  } catch (e) {
+    Logger.log('Error reading counters: ' + e);
+    return null;
+  }
 }
 
 /**
@@ -579,12 +837,13 @@ function getTopOverdueTasksForDisplay() {
 
 /**
  * Concurrency-safe manual sync (interactive entry point).
- * @return {Object} {success: true, data: dashboard} or {success: false, error: string}.
+ * @return {Object} {success: true, data: dashboard, deletedThisRun: number}
+ *   or {success: false, error: string}.
  */
 function syncNow() {
   const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
-    ingestTaskMetricsInternal();
-    return getDashboardData();
+    const snapshot = ingestTaskMetricsInternal({ allowDelete: true });
+    return { data: getDashboardData(), deletedThisRun: snapshot.deletedThisRun };
   });
 
   // Unwrap the lock result
@@ -597,79 +856,9 @@ function syncNow() {
 
   return {
     success: true,
-    data: result.result
+    data: result.result.data,
+    deletedThisRun: result.result.deletedThisRun
   };
-}
-
-/**
- * Concurrency-safe deletion of completed tasks older than a specific threshold (default: 8 weeks / 56 days).
- * Preserves recent completed tasks (< 8 weeks) in Google Tasks so throughput metrics remain visible.
- * @param {number} [cutoffWeeks=8]
- * @return {Object} { success: boolean, tasksDeleted: number, durationMs: number, data: Object, error?: string }
- */
-function deleteOldCompletedTasks(cutoffWeeks) {
-  const startTime = Date.now();
-  const weeks = (typeof cutoffWeeks === 'number' && cutoffWeeks > 0) ? cutoffWeeks : 8;
-  
-  const result = withScriptLock(TIMEOUT_INTERACTIVE_MS, () => {
-    const cutoffMs = weeks * 7 * 24 * 60 * 60 * 1000;
-    const cutoffDate = new Date(startTime - cutoffMs);
-    let totalDeleted = 0;
-    const toDelete = [];
-
-    // Single scan: accumulate fresh post-delete metrics while collecting
-    // old completed tasks for deletion (they are excluded from the fresh
-    // counts since they will no longer exist).
-    const acc = newMetricsAccumulator(new Date());
-    const complete = forEachTaskInAllLists((task, listId, listTitle) => {
-      if (isOldCompletedTask(task, cutoffDate)) {
-        toDelete.push({ task: task, listId: listId, listTitle: listTitle });
-        return;
-      }
-      accumulateTask(acc, task, listId, listTitle);
-    });
-    if (!complete) {
-      // Abort before deleting anything: the scan is incomplete.
-      throw new Error('Could not read all task lists; nothing was deleted.');
-    }
-
-    for (let i = 0; i < toDelete.length; i++) {
-      const item = toDelete[i];
-      try {
-        Tasks.Tasks.remove(item.listId, item.task.id);
-        totalDeleted++;
-      } catch (delErr) {
-        Logger.log('Failed to delete task ' + item.task.id + ': ' + delErr);
-        // Still exists: count it in the fresh metrics.
-        accumulateTask(acc, item.task, item.listId, item.listTitle);
-      }
-    }
-
-    persistSnapshot(acc);
-    const dashboardData = getDashboardData();
-    const durationMs = Date.now() - startTime;
-
-    Logger.log('[DELETE_OLD] Deleted ' + totalDeleted + ' tasks older than ' + weeks + ' weeks in ' + durationMs + 'ms');
-
-    return {
-      success: true,
-      tasksDeleted: totalDeleted,
-      durationMs: durationMs,
-      data: dashboardData
-    };
-  });
-
-  // Unwrap the withScriptLock result
-  if (!result.success) {
-    return {
-      success: false,
-      tasksDeleted: 0,
-      durationMs: Date.now() - startTime,
-      error: result.error
-    };
-  }
-
-  return result.result;
 }
 
 /**

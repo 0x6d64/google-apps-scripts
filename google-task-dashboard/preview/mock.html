@@ -111,11 +111,15 @@
       return rows.sort((a, b) => a[0] - b[0]);
     }
 
+    let autoDelete = false;
+
     function dashboardData() {
       return {
         rows: csvRows ? alignedCsvRows() : sampleRows(),
         sheetUrl: '#',
         triggerActive: true,
+        autoDeleteActive: autoDelete,
+        deletedTaskCount: 12,
         topOverdueTasksTopX: [
           { title: '!! Sample overdue task', overdueDuration: 12.4, severity: 10.6 },
           { title: 'Another sample task', overdueDuration: 3.1, severity: 1.8 }
@@ -126,10 +130,14 @@
     const RESPONSES = {
       getDashboardData: dashboardData,
       getScriptProjectId: () => 'preview',
-      syncNow: () => ({ success: true, data: dashboardData() }),
+      syncNow: () => ({
+        success: true,
+        data: dashboardData(),
+        deletedThisRun: autoDelete ? 3 : 0
+      }),
+      setAutoDeleteEnabled: (on) => (autoDelete = on),
       setTriggerEnabled: (on) => on,
       // Destructive actions are never simulated as successful.
-      deleteOldCompletedTasks: () => ({ success: false, error: 'Not available in preview' }),
       pruneDataOlderThan1Year: () => ({ success: false, error: 'Not available in preview' }),
       downsampleLastYearToHourly: () => ({ success: false, error: 'Not available in preview' })
     };
