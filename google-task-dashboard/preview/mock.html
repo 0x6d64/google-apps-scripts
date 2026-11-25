@@ -76,7 +76,7 @@
         const open = Math.round(60 + 8 * Math.sin(age / 5));
         const overdue = Math.round(12 + 5 * Math.sin(age / 3));
         rows.push([new RealDate(now - hoursAgo * HOUR).toISOString(), open,
-          Math.round(completed * 10) / 10, overdue, overdue * 2.4, 4, 9]);
+          Math.round(completed), overdue, overdue * 2.4, 4, 9]);
       }
       return rows;
     }
