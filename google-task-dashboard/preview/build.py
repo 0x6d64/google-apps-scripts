@@ -14,8 +14,9 @@ def main() -> None:
     page = read(WEBHOOK / "Index.html")
     replacements = {
         # The mock must load before the dashboard script runs.
-        "<?!= include('JavaScript'); ?>": read(HERE / "mock.html")
-        + read(WEBHOOK / "JavaScript.html"),
+        "<?!= include('Landscape'); ?>": read(HERE / "mock.html")
+        + read(WEBHOOK / "Landscape.html"),
+        "<?!= include('JavaScript'); ?>": read(WEBHOOK / "JavaScript.html"),
         "<?!= include('Styles'); ?>": read(WEBHOOK / "Styles.html"),
         "<?= BUILD_COMMIT ?>": "preview",
         "<?= BUILD_TIME ?>": "",
