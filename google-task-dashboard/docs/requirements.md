@@ -14,6 +14,8 @@ Personal use, single user, all task lists aggregated (no per-list breakdown).
   to Sheet. Serves dashboard via `doGet()`. Time-driven trigger every 3h.
 - **Google Sheet**: append-only storage. No logic.
 - **HTML dashboard**: reads Sheet data, renders interactive time-series chart.
+  `Index.html`, `Styles.html`, `JavaScript.html` (data, KPIs, chart) and
+  `Landscape.html` (background landscape).
 
 ## Auth
 
@@ -104,6 +106,9 @@ auth = sufficient security.
   red (>30 days).
 - Backlog ETA card: shown only if `completion_rate > addition_rate` and
   `open > 0`; else hidden / "Cannot estimate". Recalculates on range change.
+  The value is labelled as days left.
+- `tasks_added = max(0, open_end - open_start + completed_in_window)`;
+  `addition_rate = tasks_added / elapsed_days`.
 - Snapshot age and sheet-fetch age shown separately, both self-updating
   every 10s without backend calls. Resolution: minutes <1h, decimal hours
   1–24h (e.g. "1.2 hr ago"), whole days ≥24h.
@@ -133,10 +138,19 @@ auth = sufficient security.
   default on. Pauses when tab hidden. On refocus, fetch immediately if
   interval elapsed while hidden, then resume timer.
 - Confirmation dialogs + result stat modals for destructive/bulk actions
+- A failed auto-sync toggle restores the checkbox; a failed refresh after
+  maintenance is shown in the status banner
+
+### Dashboard — background landscape
+
+- Decorative, behind all content; weather reflects completion pace and light
+  reflects time of day
+- Details in `design-brief-background/landscape-extension-design-brief.md`
 
 ### Responsive / UI
 
 - <768px: hide KPI cards, header buttons use responsive stacking layout
+- Header buttons wrap to further rows instead of overflowing
 - All header buttons: consistent min-height, centered content, no
   layout shift from label wrapping
 - Danger Zone arrow: 90° rotation (→ collapsed, ↓ expanded), no text
@@ -169,6 +183,11 @@ auth = sufficient security.
   `getDashboardData()`. Keeps background polling free.
 - Historical Sheet rows are immutable snapshots; deleting/purging tasks
   never rewrites past rows, only affects the next snapshot's counts.
+
+## Local preview
+
+`python preview/build.py` builds the real frontend with a mocked backend
+into `preview/preview.html`. See `preview/README.md`.
 
 ## Deployment
 

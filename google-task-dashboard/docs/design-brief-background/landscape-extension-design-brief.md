@@ -33,64 +33,67 @@ original reference; the visuals have since moved away from it.
 
 ### 1.2 Visual hierarchy
 
-**Fixed landscape elements** (never change): sky gradient, mountain
-ranges, ground, treeline, cabin structure, campfire base (logs, stones).
+**Fixed landscape elements** (same shapes at all times): mountain ranges,
+ground, treeline, pines, cabin, campfire base.
 
-**Weather elements** (respond to metric): cloud color/opacity/size/rain
-per own snapshot metric, sun opacity and glow.
+**Weather elements** (respond to metrics): cloud count, color, size and
+rain per snapshot metric; sun size and brightness and sky warmth per range
+metric.
 
-**Daylight elements** (respond to time of day): dusk/night washes, sun
-position, moon/stars alpha, foreground silhouette grade, rim light,
-shadow length, fire/window glow boost.
+**Daylight elements** (respond to time of day): all colors, sun position,
+moon and stars, light direction, shadows, window and fire glow.
 
-**Animation**: timeline clouds are pinned (no drift); appearance morphs
-continuously via `weatherAt()` interpolation, 0.75s on change. Sun
-travels east-to-west. Fire/smoke/sparks animate continuously.
+**Animation**: timeline clouds are pinned (no drift). Range-driven values
+morph over 0.75s. The fire is the only continuous animation.
 
 ## 2. Metric Computation
 
 ### 2.1 Core concept
 
-Trajectory metric is computed **relative to the selected range**,
-anchored against a **fixed 14-day baseline** that never changes:
+The range metric compares the completion pace **within the selected
+range** with the pace over a **longer baseline** that contains it:
 
 ```
-velocityBaseline = avg(completions/day, last 14 days)     // FIXED
-velocityRecent   = avg(completions/day, last N days)      // N = range
+N                = selected range in days ('all' counts as 30)
+B                = max(14, 2 × N)
+velocityBaseline = completions/day over the last B days
+velocityRecent   = completions/day over the last N days
 trendRatio       = velocityRecent / velocityBaseline
 metric           = clamp((trendRatio - 0.85) / 0.3, 0, 1)
-                   // 0.85 is "steady", 0.3 is the scaling factor
-                   // zero baseline defaults to 0.5 (neutral)
+                   // 0.5 is reached at a ratio of 1.0
+                   // zero baseline or too little data gives 0.5 (neutral)
 ```
 
 Velocities use actual elapsed time between first/last snapshot in each
 window (not fixed intervals), summing positive `completed` deltas only.
 
-### 2.2 Why a fixed baseline
+| Range | Baseline |
+|---|---|
+| 1D, 3D, 7D | 14 days |
+| 14D | 28 days |
+| 30D, All | 60 days |
 
-A range-matched baseline would hover near 1.0 (metric collapses to
-noise). The fixed reference point makes narrow ranges (1D/3D) volatile
-(a great day is a sunbreak, a bad day a squall), wide ranges calmer,
-and 30D/All near-neutral — responsive on check-in, meditative on
-review. This is intentional, not a bug.
+### 2.2 Why the baseline grows with the range
 
-### 2.3 "All" range and early data
+The baseline must be longer than the range. With a fixed 14-day baseline,
+14D compared a period with itself (always neutral), and 30D/All compared
+backwards: recent speed-up lowered the metric.
 
-"All" uses the trailing-30d window with the same 14d baseline (behaves
-like 30D). With < 14 days of history, the baseline falls back to all
-available history.
+Narrow ranges stay volatile (a great day is a sunbreak, a bad day a
+squall). The sun answers "is my pace in this range better than my
+longer-term pace?" at every setting.
 
-### 2.4 Invariant
+### 2.3 Early data
 
-Baseline window is always 14 days (or all history if shorter),
-independent of range. Only the numerator window changes.
+With less history than `B`, the baseline is all available history. With no
+more history than the range itself, the metric is neutral.
 
-### 2.5 Per-snapshot metrics (timeline clouds)
+### 2.4 Per-snapshot metrics (timeline clouds)
 
 Range selection changes only the *visible cloud set*, never the
 metrics: each snapshot carries its own trailing-3d vs trailing-14d
 ratio from data up to its own timestamp. Downsample oldest-first,
-cap ~25, always keep latest. History never rewrites (immutability by
+cap 25, always keep latest. History never rewrites (immutability by
 math, no stored flags).
 
 ## 3. Transitions
@@ -196,17 +199,16 @@ Check visuals with the local harness in `preview/`.
 
 ## 11. Open questions
 
-1. **Sky tint by metric** (warmer when clear): deferred.
-2. **House interior light**: done (warm windows + night boost).
+1. **Sky tint by metric**: done (slight warm or grey tint).
+2. **House interior light**: done (windows lit from dusk to dawn).
 3. **Seasonal color shifts**: deferred (only sun times shift today).
 4. **Sound**: never — a dashboard background stays silent.
-5. **Daily cycle**: ported to the dashboard (browser clock, always
-   auto). One frame per minute keeps the blend fresh; no slider.
+5. **Daily cycle**: done (browser clock). One frame per minute keeps the
+   blend fresh; no slider outside the local preview.
 
 ## 12. Notes
 
 - **Metaphor alignment**: the landscape responds to recent pace within
   the examined window — "what matters to you right now."
-- **Non-punitive**: widening the range calms the weather (integrating
-  noise). Short-term noise is normal; long-term trends matter.
+- **Non-punitive**: short-term noise is normal; long-term trends matter.
 - **Testing visuals**: use `preview/`. No automated tests are in the repo.
