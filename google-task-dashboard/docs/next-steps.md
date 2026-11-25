@@ -351,6 +351,27 @@ in case the sheet was already shrunk by earlier runs.
 
 ---
 
+### 15. Redraw landscape background and clean up frontend
+
+✅ **DONE**
+
+**Implementation:** Moved the landscape into its own include, replaced the
+day/night washes with blended palettes, redrew cabin and clouds, and fixed
+frontend bugs found in review.
+
+**Changes:**
+- New `Landscape.html` with one `update(rows, range)` entry point
+- Linear-time cloud metrics, single animation frame chain
+- Cabin and fire in the left margin; range metric drives sun and sky
+- Fixed ETA font and unit, trigger toggle revert, refresh error banner
+- Local preview harness in `preview/`
+
+**Files:** Landscape.html, JavaScript.html, Index.html, Styles.html
+
+**Effort:** L ✓
+
+---
+
 ## Feature requests
 
 _None._
