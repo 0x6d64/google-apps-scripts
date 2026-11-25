@@ -43,7 +43,7 @@ When editing this doc, use the following guidelines:
 **Changes:**
 - Added `backlogCountsNote` display element in Index.html
 - Added `getWindowRows()` helper to filter snapshots to time window
-- Added `calculateTasksAdded()` function using formula: `(open_start - open_end + completed)`
+- Added `calculateTasksAdded()` function using formula: `(open_end - open_start + completed)`
 - Refactored `calculateAdditionRate()` to reuse helpers
 - Updated `updateBacklogEstimate()` to calculate and display counts conditionally
 
@@ -346,6 +346,62 @@ in case the sheet was already shrunk by earlier runs.
 - Replaced hard-coded column count `8` with `TOP_OVERDUE_HEADERS.length`
 
 **Files:** Code.js
+
+**Effort:** S ✓
+
+---
+
+### 15. Redraw landscape background and clean up frontend
+
+✅ **DONE**
+
+**Implementation:** Moved the landscape into its own include, replaced the
+day/night washes with blended palettes, redrew cabin and clouds, and fixed
+frontend bugs found in review.
+
+**Changes:**
+- New `Landscape.html` with one `update(rows, range)` entry point
+- Linear-time cloud metrics, single animation frame chain
+- Cabin and fire in the left margin; range metric drives sun and sky
+- Fixed ETA font and unit, trigger toggle revert, refresh error banner
+- Removed the unused frontend `getTaskWeight()` added in item 3
+- Header buttons wrap; per-task "Open Google Tasks" requirement dropped
+- Local preview harness in `preview/`
+
+**Files:** Landscape.html, JavaScript.html, Index.html, Styles.html
+
+**Effort:** L ✓
+
+---
+
+### 16. Fix inverted task addition formula
+
+✅ **DONE**
+
+**Implementation:** The backlog ETA computed tasks added with swapped
+operands, under-counting a growing backlog.
+
+**Changes:**
+- `tasks_added = open_end - open_start + completed`
+
+**Files:** JavaScript.html
+
+**Effort:** S ✓
+
+---
+
+### 17. Range weather baseline longer than the range
+
+✅ **DONE**
+
+**Implementation:** The range metric compared with a fixed 14 days, so 14D
+was always neutral and 30D/All read backwards.
+
+**Changes:**
+- Baseline is `max(14 days, 2 × range)`, limited by available history
+- Preview sample data covers 75 days
+
+**Files:** Landscape.html, preview/mock.html
 
 **Effort:** S ✓
 

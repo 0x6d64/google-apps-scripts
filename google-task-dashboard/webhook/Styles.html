@@ -126,6 +126,7 @@
   /* Actions */
   .header-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     align-items: center;
   }
@@ -738,6 +739,12 @@
       font-size: 12px;
     }
 
+    /* Whole buttons move to the next row; labels stay on one line. */
+    .header-actions .btn {
+      flex-basis: auto;
+      white-space: nowrap;
+    }
+
     .controls-toolbar {
       flex-direction: column;
       align-items: flex-start;
@@ -771,6 +778,10 @@
     text-align: center;
     font-size: 0.8rem;
     color: var(--text-muted);
-    padding: 12px 0;
+    margin: 12px auto;
+    padding: 2px 10px;
+    width: fit-content;
+    border-radius: 8px;
+    background: rgba(240, 248, 255, 0.84);
   }
 </style>
