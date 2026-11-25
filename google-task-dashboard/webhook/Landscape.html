@@ -8,7 +8,7 @@
     const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
     // Metrics and animation
-    const LANDSCAPE_BASELINE_WINDOW_DAYS = 14;
+    const LANDSCAPE_BASELINE_WINDOW_DAYS = 14; // minimum baseline
     const LANDSCAPE_ALL_RANGE_WINDOW_DAYS = 30;
     const LANDSCAPE_RECENT_WINDOW_DAYS = 3; // per-snapshot metric numerator window
     const LANDSCAPE_METRIC_NEUTRAL = 0.5;
@@ -919,10 +919,10 @@
     }
 
     /**
-     * Computes the trajectory-weather metric for a given display range, using a
-     * fixed 14-day baseline (or all available history if shorter) as the stable
-     * reference point. Only the "recent" window scales with the selected range;
-     * the baseline never does. See landscape-extension-design-brief.md section 2.
+     * Computes the trajectory-weather metric for a display range: completion
+     * pace within the range against the pace over a longer baseline of
+     * max(14 days, 2 x range), or all available history if that is shorter.
+     * See landscape-extension-design-brief.md section 2.
      * @param {Array<Array<any>>} rows - Snapshot rows [timestamp, open, completed, overdue, severity]
      * @param {number} rangeDays - Active display range in days (30 substituted for 'all')
      * @return {number} - Metric in [0, 1], where 0.5 is neutral/steady
@@ -932,10 +932,12 @@
 
       const now = Date.now();
 
-      // Determine baseline window: 14 days, or all available history if shorter.
       const earliestTime = new Date(rows[0][0]).getTime();
       const availableHistoryDays = (now - earliestTime) / MS_PER_DAY;
-      const baselineWindowDays = Math.min(LANDSCAPE_BASELINE_WINDOW_DAYS, Math.max(1, availableHistoryDays));
+      // Longer than the range, so a range is never compared with itself.
+      const baselineWindowDays = Math.min(
+        Math.max(LANDSCAPE_BASELINE_WINDOW_DAYS, 2 * rangeDays),
+        Math.max(1, availableHistoryDays));
 
       const sumPositiveDeltas = (windowDays) => {
         const cutoff = now - windowDays * MS_PER_DAY;

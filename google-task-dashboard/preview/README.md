@@ -23,8 +23,8 @@ newest row is "now". Do not commit the export.
 
 `?hour=22&date=2026-12-21&scenario=storm&scenery`
 
-`?rows=N` sets the number of sample rows, spread evenly over the 45 days. The default is one
-row per 3 hours (361 rows). Completed still grows by the scenario rate per day.
+`?rows=N` sets the number of sample rows, spread evenly over the 75 days. The default is one
+row per 3 hours (601 rows). Completed still grows by the scenario rate per day.
 
 `?fail=name1,name2` makes those `google.script.run` calls invoke the failure handler with
 `Error('Simulated failure: <name>')` instead of the success handler, for example
