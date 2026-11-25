@@ -1,0 +1,188 @@
+<style>
+  #previewPanel {
+    position: fixed; right: 12px; bottom: 12px; z-index: 3000; width: 250px;
+    padding: 10px 12px; border-radius: 10px; background: #fff; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  }
+  #previewPanel label { display: block; margin-top: 6px; }
+  #previewPanel select, #previewPanel input:not([type=checkbox]) { width: 100%; }
+  body.preview-scenery .container, body.preview-scenery .build-info { visibility: hidden; }
+</style>
+
+<details id="previewPanel" open>
+  <summary><strong>Preview controls</strong></summary>
+  <label>Time of day: <span id="pvHourLabel"></span>
+    <input type="range" id="pvHour" min="0" max="23.75" step="0.25">
+  </label>
+  <label>Date <input type="date" id="pvDate"></label>
+  <label>Sample data
+    <select id="pvScenario">
+      <option value="mixed">Mixed weather</option>
+      <option value="calm">Speeding up (clear)</option>
+      <option value="steady">Steady</option>
+      <option value="storm">Slowing down (stormy)</option>
+    </select>
+  </label>
+  <label>Metrics CSV export (stays local) <input type="file" id="pvCsv" accept=".csv"></label>
+  <label><input type="checkbox" id="pvScenery"> Show scenery only</label>
+</details>
+
+<script>
+  // Preview only: fake clock and fake google.script.run.
+  (function () {
+    const RealDate = Date;
+    const params = new URLSearchParams(location.search);
+    let offsetMs = 0;
+    let csvRows = null;
+
+    window.Date = class extends RealDate {
+      constructor(...args) {
+        if (args.length === 0) super(RealDate.now() + offsetMs);
+        else super(...args);
+      }
+      static now() { return RealDate.now() + offsetMs; }
+    };
+
+    const HOUR = 3600000;
+    const scenario = () => document.getElementById('pvScenario').value;
+
+    // Completions per day, as a function of age in days. The landscape compares
+    // the last 3 days with the last 14, so the slope decides the weather.
+    const RATES = {
+      calm: (age) => 8 * Math.exp(-age / 8),
+      steady: () => 4,
+      storm: (age) => 0.5 * Math.exp(Math.min(age, 30) / 8),
+      mixed: (age) => 4 + 3.5 * Math.sin(age / 2.2)
+    };
+
+    function sampleRows() {
+      const rate = RATES[scenario()];
+      const now = Date.now();
+      const rows = [];
+      let completed = 100;
+      for (let hoursAgo = 45 * 24; hoursAgo >= 0; hoursAgo -= 3) {
+        const age = hoursAgo / 24;
+        completed += rate(age) / 8;
+        const open = Math.round(60 + 8 * Math.sin(age / 5));
+        const overdue = Math.round(12 + 5 * Math.sin(age / 3));
+        rows.push([new RealDate(now - hoursAgo * HOUR).toISOString(), open,
+          Math.round(completed * 10) / 10, overdue, overdue * 2.4, 4, 9]);
+      }
+      return rows;
+    }
+
+    // Shifts imported rows so the newest one sits at the preview's "now".
+    function alignedCsvRows() {
+      const shift = Date.now() - csvRows[csvRows.length - 1][0];
+      return csvRows.map((r) => [new RealDate(r[0] + shift).toISOString(), ...r.slice(1)]);
+    }
+
+    function parseCsv(text) {
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      const delimiter = lines[0].includes(';') ? ';' : ',';
+      const cells = (line) => line
+        .split(new RegExp(delimiter + '(?=(?:[^"]*"[^"]*")*[^"]*$)'))
+        .map((c) => c.replace(/^"|"$/g, ''));
+      const header = cells(lines[0]);
+      const names = ['timestamp', 'open', 'completed', 'overdue', 'overdue_severity',
+        'subtasks_open', 'subtasks_completed'];
+      const index = names.map((n) => header.indexOf(n));
+      if (index.slice(0, 5).includes(-1)) throw new Error('Missing columns: ' + names.join(', '));
+
+      const rows = lines.slice(1).map((line) => {
+        const c = cells(line);
+        return index.map((i, col) => col === 0
+          ? new RealDate(c[i]).getTime()
+          : Number(String(c[i] || 0).replace(',', '.')));
+      });
+      if (!rows.length || rows.some((r) => r.some(Number.isNaN))) {
+        throw new Error('Unreadable timestamp or number. Expected ISO timestamps.');
+      }
+      return rows.sort((a, b) => a[0] - b[0]);
+    }
+
+    function dashboardData() {
+      return {
+        rows: csvRows ? alignedCsvRows() : sampleRows(),
+        sheetUrl: '#',
+        triggerActive: true,
+        topOverdueTasksTopX: [
+          { title: '!! Sample overdue task', overdueDuration: 12.4, severity: 10.6 },
+          { title: 'Another sample task', overdueDuration: 3.1, severity: 1.8 }
+        ]
+      };
+    }
+
+    const RESPONSES = {
+      getDashboardData: dashboardData,
+      getScriptProjectId: () => 'preview',
+      syncNow: () => ({ success: true, data: dashboardData() }),
+      setTriggerEnabled: (on) => on,
+      // Destructive actions are never simulated as successful.
+      deleteOldCompletedTasks: () => ({ success: false, error: 'Not available in preview' }),
+      pruneDataOlderThan1Year: () => ({ success: false, error: 'Not available in preview' }),
+      downsampleLastYearToHourly: () => ({ success: false, error: 'Not available in preview' })
+    };
+
+    function runner(onSuccess) {
+      const api = {
+        withSuccessHandler: (fn) => runner(fn),
+        withFailureHandler: () => api
+      };
+      for (const name of Object.keys(RESPONSES)) {
+        api[name] = (...args) => setTimeout(() => {
+          if (onSuccess) onSuccess(RESPONSES[name](...args));
+        }, 0);
+      }
+      return api;
+    }
+    window.google = window.google || {};
+    window.google.script = { run: runner() };
+
+    // ---- controls
+    const el = (id) => document.getElementById(id);
+    const pad = (n) => String(n).padStart(2, '0');
+    const today = new RealDate();
+
+    el('pvHour').value = params.get('hour') || today.getHours();
+    el('pvDate').value = params.get('date') ||
+      today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate());
+    el('pvScenario').value = params.get('scenario') || 'mixed';
+    if (params.has('scenery')) {
+      el('pvScenery').checked = true;
+      document.body.classList.add('preview-scenery');
+      el('previewPanel').style.display = 'none';
+    }
+
+    function applyClock() {
+      const hour = Number(el('pvHour').value);
+      const label = pad(Math.floor(hour)) + ':' + pad((hour % 1) * 60);
+      el('pvHourLabel').textContent = label;
+      offsetMs = new RealDate(el('pvDate').value + 'T' + label).getTime() - RealDate.now();
+    }
+
+    function refresh() {
+      applyClock();
+      window.dispatchEvent(new Event('resize')); // repaints the landscape
+      el('btnReloadData').click();
+    }
+
+    applyClock();
+    el('pvHour').addEventListener('input', refresh);
+    el('pvDate').addEventListener('change', refresh);
+    el('pvScenario').addEventListener('change', () => { csvRows = null; refresh(); });
+    el('pvScenery').addEventListener('change', (e) => {
+      document.body.classList.toggle('preview-scenery', e.target.checked);
+    });
+    el('pvCsv').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        csvRows = parseCsv(await file.text());
+        refresh();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  })();
+</script>
