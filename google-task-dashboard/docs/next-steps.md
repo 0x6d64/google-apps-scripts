@@ -43,7 +43,7 @@ When editing this doc, use the following guidelines:
 **Changes:**
 - Added `backlogCountsNote` display element in Index.html
 - Added `getWindowRows()` helper to filter snapshots to time window
-- Added `calculateTasksAdded()` function using formula: `(open_start - open_end + completed)`
+- Added `calculateTasksAdded()` function using formula: `(open_end - open_start + completed)`
 - Refactored `calculateAdditionRate()` to reuse helpers
 - Updated `updateBacklogEstimate()` to calculate and display counts conditionally
 

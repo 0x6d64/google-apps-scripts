@@ -515,13 +515,13 @@
       const newestOpen = typeof windowRows[windowRows.length - 1][1] === 'number' ? windowRows[windowRows.length - 1][1] : 0;
       const completedInPeriod = calculateCompletionsInWindow(windowRows);
 
-      // Tasks added = (open_start - open_end + completed)
-      return Math.max(0, oldestOpen - newestOpen + completedInPeriod);
+      // Tasks added = open_end - open_start + completed
+      return Math.max(0, newestOpen - oldestOpen + completedInPeriod);
     }
 
     /**
      * Calculates task addition rate over the selected historical window.
-     * Addition rate = (open_start - open_end + completed_in_period) / days_elapsed
+     * Addition rate = (open_end - open_start + completed_in_period) / days_elapsed
      * @param {Array<Array<any>>} rows - All snapshot rows
      * @param {number|string} rangeDays - Selected range (3, 7, 14, 30, or 'all')
      * @return {number} - Tasks added per day
